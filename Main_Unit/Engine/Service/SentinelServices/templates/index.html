@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Aria Security Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- shadcn-like light theme with subtle glass effect -->
+    <style>
+        :root {
+            --background: #f9fafb;
+            --foreground: #020617;
+            --muted: #e5e7eb;
+            --muted-foreground: #6b7280;
+            --border: #e5e7eb;
+            --ring: #2563eb;
+            --primary: #2563eb;
+            --primary-foreground: #f9fafb;
+            --destructive: #ef4444;
+            --destructive-foreground: #fef2f2;
+            --radius-lg: 16px;
+        }
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: radial-gradient(circle at top, #e0f2fe 0, #f9fafb 55%);
+            color: var(--foreground);
+        }
+        .shell {
+            min-height: 100vh;
+            display: flex;
+            align-items: stretch;
+            justify-content: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1040px;
+            padding: 24px 16px 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            width: 100%;
+            border-radius: var(--radius-lg);
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow:
+                0 18px 60px rgba(15, 23, 42, 0.18),
+                0 0 0 1px rgba(148, 163, 184, 0.4);
+            padding: 20px 22px;
+            backdrop-filter: blur(18px);
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .title-block {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        h1 {
+            font-size: 1.4rem;
+            letter-spacing: -0.02em;
+            margin: 0;
+        }
+        .subtitle {
+            font-size: 0.8rem;
+            color: var(--muted-foreground);
+        }
+        .pill-env {
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            font-size: 0.7rem;
+            color: #1d4ed8;
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            white-space: nowrap;
+        }
+        .pill-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+        }
+        .pill-dot.off {
+            background: #9ca3af;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+            gap: 16px;
+        }
+        @media (max-width: 768px) {
+            .card {
+                padding: 16px;
+            }
+            .content-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
+
+        .panel {
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(249, 250, 251, 0.9);
+            padding: 14px 14px 12px;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .panel-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        .panel-caption {
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+        }
+
+        label {
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            display: block;
+            margin-bottom: 4px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 7px 9px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: #f9fafb;
+            color: var(--foreground);
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+        }
+        input[type="text"]::placeholder {
+            color: #9ca3af;
+        }
+        input[type="text"]:focus {
+            border-color: var(--ring);
+            box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.28);
+            background: #ffffff;
+        }
+
+        .btn-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        button {
+            border: none;
+            border-radius: 999px;
+            padding: 7px 13px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+            transition: transform 0.08s ease-out, box-shadow 0.1s ease-out, background 0.1s;
+        }
+        button:active {
+            transform: translateY(1px);
+            box-shadow: none;
+        }
+        .btn-primary {
+            background: linear-gradient(to right, #2563eb, #4f46e5);
+            color: var(--primary-foreground);
+            box-shadow: 0 12px 24px rgba(37, 99, 235, 0.3);
+        }
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #111827;
+        }
+        .btn-danger {
+            background: linear-gradient(to right, #ef4444, #f97316);
+            color: var(--destructive-foreground);
+            box-shadow: 0 12px 24px rgba(248, 113, 113, 0.4);
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid #e5e7eb;
+            background: #f9fafb;
+            font-size: 0.75rem;
+            color: #4b5563;
+        }
+
+        .status-stack {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .status-box {
+            border-radius: 10px;
+            border: 1px solid #e5e7eb;
+            background: #ffffff;
+            padding: 8px 10px;
+        }
+        .status-label {
+            font-size: 0.72rem;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .status-value {
+            margin-top: 3px;
+            font-size: 0.88rem;
+            color: #111827;
+            font-weight: 500;
+        }
+
+        .log {
+            margin-top: 4px;
+            border-radius: 12px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            max-height: 260px;
+            overflow-y: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.78rem;
+            padding: 8px 10px;
+        }
+        .log-entry {
+            margin-bottom: 3px;
+            white-space: pre-wrap;
+        }
+        .log-entry span.ts {
+            color: #9ca3af;
+        }
+        .log-entry span.tag {
+            color: #0369a1;
+        }
+        .log-entry span.tag.warn {
+            color: #ca8a04;
+        }
+        .log-entry span.tag.err {
+            color: #b91c1c;
+        }
+
+        .footer {
+            margin-top: 12px;
+            font-size: 0.7rem;
+            color: #9ca3af;
+            text-align: right;
+        }
+    </style>
+
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+<div class="shell">
+    <div class="container">
+        <div class="card">
+            <div class="card-header">
+                <div class="title-block">
+                    <h1>Aria Security Console</h1>
+                    <div class="subtitle">Monitor and control your Sentinel engine securely from any paired device.</div>
+                </div>
+                <div class="pill-env">
+                    <span id="env-pill-dot" class="pill-dot off"></span>
+                    Remote channel
+                </div>
+            </div>
+
+            <div class="content-grid">
+                <!-- Left panel: controls + status -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <div class="panel-title">Session & Control</div>
+                            <div class="panel-caption">Paste the session token created from QR pairing.</div>
+                        </div>
+                    </div>
+
+                    <label for="token-input">Session token</label>
+                    <input id="token-input" type="text" placeholder="Paste session_token from pairing" />
+
+                    <div class="btn-row">
+                        <button class="btn-secondary" id="btn-use-token">
+                            Use token
+                        </button>
+                        <div class="chip" id="pill-conn">
+                            <span id="pill-dot" class="pill-dot off"></span>
+                            Socket: disconnected
+                        </div>
+                    </div>
+
+                    <div class="status-stack">
+                        <div class="status-box">
+                            <div class="status-label">Protection status</div>
+                            <div class="status-value" id="status-text">Unknown</div>
+                        </div>
+                        <div class="status-box">
+                            <div class="status-label">Display status</div>
+                            <div class="status-value" id="display-text">Unknown</div>
+                        </div>
+                        <div class="status-box">
+                            <div class="status-label">Engine</div>
+                            <div class="status-value" id="running-text">Unknown</div>
+                        </div>
+                    </div>
+
+                    <div class="btn-row" style="margin-top: 10px;">
+                        <button class="btn-primary" id="btn-start">Start protection</button>
+                        <button class="btn-danger" id="btn-stop">Stop protection</button>
+                    </div>
+                </div>
+
+                <!-- Right panel: live log -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <div class="panel-title">Live activity</div>
+                            <div class="panel-caption">Events streamed from the Sentinel service in real time.</div>
+                        </div>
+                    </div>
+                    <div class="log" id="log-box"></div>
+                </div>
+            </div>
+
+            <div class="footer">
+                Aria Security · Remote console channel
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const logBox = document.getElementById('log-box');
+    const statusText = document.getElementById('status-text');
+    const displayText = document.getElementById('display-text');
+    const runningText = document.getElementById('running-text');
+    const tokenInput = document.getElementById('token-input');
+    const btnUseToken = document.getElementById('btn-use-token');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const pillConn = document.getElementById('pill-conn');
+    const pillDot = document.getElementById('pill-dot');
+    const envPillDot = document.getElementById('env-pill-dot');
+
+    let sessionToken = '';
+    let socket = null;
+
+    function log(tag, message, level = 'info') {
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const tagSpan = document.createElement('span');
+        tagSpan.className = 'tag ' + (level === 'warn' ? 'warn' : level === 'err' ? 'err' : '');
+        tagSpan.textContent = '[' + tag + '] ';
+        const tsSpan = document.createElement('span');
+        tsSpan.className = 'ts';
+        tsSpan.textContent = ts + ' ';
+        const msgSpan = document.createElement('span');
+        msgSpan.textContent = message;
+
+        entry.appendChild(tsSpan);
+        entry.appendChild(tagSpan);
+        entry.appendChild(msgSpan);
+        logBox.appendChild(entry);
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function setSocketState(connected) {
+        if (connected) {
+            pillConn.childNodes[1].textContent = ' Socket: connected';
+            pillDot.classList.remove('off');
+            envPillDot.classList.remove('off');
+        } else {
+            pillConn.childNodes[1].textContent = ' Socket: disconnected';
+            pillDot.classList.add('off');
+            envPillDot.classList.add('off');
+        }
+    }
+
+    function fetchStatus() {
+        if (!sessionToken) return;
+        fetch('/status', {
+            method: 'GET',
+            headers: {
+                'Authorization': 'Bearer ' + sessionToken
+            }
+        }).then(async (res) => {
+            if (!res.ok) {
+                log('HTTP', 'Status fetch failed: ' + res.status, 'warn');
+                return;
+            }
+            const data = await res.json();
+            statusText.textContent = data.status || 'Unknown';
+            displayText.textContent = data.display_status || 'Unknown';
+            runningText.textContent = data.running ? 'Running' : 'Stopped';
+            log('HTTP', 'Status updated');
+        }).catch(err => {
+            log('HTTP', 'Status fetch error: ' + err, 'err');
+        });
+    }
+
+    function connectSocket() {
+        if (socket) {
+            socket.disconnect();
+            socket = null;
+        }
+        socket = io('/', {
+            path: '/socket.io',
+            transports: ['websocket', 'polling'],
+        });
+
+        socket.on('connect', () => {
+            setSocketState(true);
+            log('SOCKET', 'Connected to Sentinel events');
+        });
+
+        socket.on('disconnect', () => {
+            setSocketState(false);
+            log('SOCKET', 'Disconnected from Sentinel events', 'warn');
+        });
+
+        socket.on('status_changed', (data) => {
+            statusText.textContent = data.status || statusText.textContent;
+            log('EVENT', 'status_changed → ' + (data.status || ''));
+        });
+
+        socket.on('display_changed', (data) => {
+            displayText.textContent = data.display || displayText.textContent;
+            log('EVENT', 'display_changed → ' + (data.display || ''));
+        });
+
+        socket.on('scan_complete', (data) => {
+            const msg = `Scan complete: ${data.threats} threats at ${data.timestamp}`;
+            log('EVENT', msg);
+        });
+
+        socket.on('status_update', (data) => {
+            runningText.textContent = data.running ? 'Running' : 'Stopped';
+            log('EVENT', 'status_update → running=' + data.running);
+        });
+    }
+
+    btnUseToken.addEventListener('click', () => {
+        const t = tokenInput.value.trim();
+        if (!t) {
+            log('UI', 'Please paste a session_token first', 'warn');
+            return;
+        }
+        sessionToken = t;
+        log('UI', 'Session token set');
+        fetchStatus();
+        connectSocket();
+    });
+
+    btnStart.addEventListener('click', () => {
+        if (!sessionToken) {
+            log('UI', 'Set session token before controlling', 'warn');
+            return;
+        }
+        fetch('/control/start', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + sessionToken,
+                'Content-Type': 'application/json',
+            },
+            body: '{}',
+        }).then(async (res) => {
+            if (!res.ok) {
+                const text = await res.text();
+                log('HTTP', 'Start failed: ' + res.status + ' ' + text, 'err');
+                return;
+            }
+            log('HTTP', 'Start requested');
+            fetchStatus();
+        }).catch(err => {
+            log('HTTP', 'Start error: ' + err, 'err');
+        });
+    });
+
+    btnStop.addEventListener('click', () => {
+        if (!sessionToken) {
+            log('UI', 'Set session token before controlling', 'warn');
+            return;
+        }
+        fetch('/control/stop', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + sessionToken,
+                'Content-Type': 'application/json',
+            },
+            body: '{}',
+        }).then(async (res) => {
+            if (!res.ok) {
+                const text = await res.text();
+                log('HTTP', 'Stop failed: ' + res.status + ' ' + text, 'err');
+                return;
+            }
+            log('HTTP', 'Stop requested');
+            fetchStatus();
+        }).catch(err => {
+            log('HTTP', 'Stop error: ' + err, 'err');
+        });
+    });
+</script>
+</body>
+</html>

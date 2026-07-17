@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime logs
+logs/*.log
+logs/*.txt
+*.log
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
+
+# Scratch / temp
+*.tmp
+*.bak
+
+# Large binaries kept on disk but out of git history
+# (.exe = PyInstaller output, regenerable + slated for Phase 3 removal;
+#  .ips = compiled rules blob, regenerable from Rules-full.yar)
+Plugin/SentinelServices/*.exe
+Main_Unit/Engine/Ips/*.ips
