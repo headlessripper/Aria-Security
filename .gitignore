@@ -31,3 +31,6 @@ Desktop.ini
 #  .ips = compiled rules blob, regenerable from Rules-full.yar)
 Plugin/SentinelServices/*.exe
 Main_Unit/Engine/Ips/*.ips
+
+# Subagent-driven-development scratch (progress ledger, briefs)
+.superpowers/
