@@ -13,10 +13,24 @@ class CertReputation:
         self.abused = {s.lower() for s in (abused_signers or [])}
 
     def evaluate(self, file_path):
+        # Fast path: embedded Authenticode (WTD_CHOICE_FILE).
         try:
             trusted = bool(self.sign.sign_verify(file_path))
         except Exception:
             trusted = False
+        signature_type = "embedded" if trusted else None
+
+        # Slow path: most modern Windows system binaries are catalog-signed (the
+        # signature lives in a system .cat, not the PE), so the embedded check reads
+        # them as untrusted. Fall back to catalog verification to avoid false positives.
+        if not trusted:
+            try:
+                if bool(self.sign.catalog_verify(file_path)):
+                    trusted = True
+                    signature_type = "catalog"
+            except Exception:
+                pass
+
         signer = self._signer_name(file_path)
         return {
             "signed": trusted,          # WinVerifyTrust trusts only valid signatures
@@ -24,6 +38,7 @@ class CertReputation:
             "revoked": False,           # best-effort; full revocation check deferred
             "abused": bool(signer and signer.lower() in self.abused),
             "signer": signer,
+            "signature_type": signature_type,   # "embedded" | "catalog" | None
         }
 
     def _signer_name(self, file_path):
