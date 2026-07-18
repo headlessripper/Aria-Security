@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import List
 
-_WHITELIST_PATH = "Main_Unit/Config/sentinel_whitelist.json"
+_WHITELIST_PATH = "Config/sentinel_whitelist.json"
 _LOCK = threading.Lock()
 _INSTANCE: "SentinelWhitelist | None" = None
 

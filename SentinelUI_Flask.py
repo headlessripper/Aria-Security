@@ -59,14 +59,14 @@ socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*",
                     logger=False, engineio_logger=False)
 
 # ── Backend imports ───────────────────────────────────────────────────────────
-from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent
+from Services.SentinelBrain import get_brain, ThreatEvent
 
 # Preload heavy service in daemon thread
 _svc_module: dict = {}
 
 def _preload_service():
     try:
-        from Main_Unit.Engine.Service.SentinelService_v2 import SentinelService as _Svc
+        from Services.SentinelService_v2 import SentinelService as _Svc
         _svc_module["cls"] = _Svc
     except Exception as exc:
         _svc_module["error"] = exc
@@ -81,7 +81,7 @@ threading.Thread(target=_preload_service, daemon=True, name="ServicePreload").st
 
 # Config
 try:
-    from Main_Unit.Config.Sys_Config import (
+    from Config.Sys_Config import (
         VERSION, COMPILER_VERSION, BUILD_DATE, APP_NAME,
         BEHAVIORAL_RULES_PATH, APP_DESCRIPTION, DEVELOPER, CONFIG_PATH,
     )
@@ -90,7 +90,7 @@ except Exception:
     BEHAVIORAL_RULES_PATH = ""
     APP_DESCRIPTION = "AI-powered antivirus and system defense platform."
     DEVELOPER = "Samuel Ikenna Great"
-    CONFIG_PATH = "Main_Unit/Config.json"
+    CONFIG_PATH = "Config/Config.json"
 
 # ── Settings shim ─────────────────────────────────────────────────────────────
 _SETTINGS_PATH = Path.home() / ".AriaSecurity" / "settings.json"
@@ -115,7 +115,7 @@ def _save_settings(data: dict):
 
 def _load_config() -> dict:
     try:
-        from Main_Unit.find_items import find_items
+        from Interface.find_items import find_items
         p = find_items(CONFIG_PATH)
         if p and os.path.exists(p):
             with open(p, encoding="utf-8") as f:
@@ -200,8 +200,8 @@ def _state_pusher():
 threading.Thread(target=_state_pusher, daemon=True, name="StatePusher").start()
 
 # ── Scan history / Scheduler helpers ─────────────────────────────────────────
-import Main_Unit.Engine.Service.SentinelScanHistory as _sh
-import Main_Unit.Engine.Service.SentinelScheduler   as _sched
+import Services.SentinelScanHistory as _sh
+import Services.SentinelScheduler   as _sched
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
@@ -220,7 +220,7 @@ def static_files(filename):
 @app.route("/favicon.ico")
 def favicon():
     for cand in (_ROOT / "Icon" / "Sentinel.ico",
-                 _ROOT / "Main_Unit" / "Service" / "Icon" / "Icon-100.png"):
+                 _ROOT / "Interface" / "Icons" / "Icon-100.png"):
         if cand.exists():
             mime = ("image/vnd.microsoft.icon" if cand.suffix == ".ico"
                     else "image/png")
@@ -361,7 +361,7 @@ def api_scheduled_scans_toggle(sid):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _wl():
-    from Main_Unit.Engine.Service.SentinelWhitelist import get_whitelist
+    from Services.SentinelWhitelist import get_whitelist
     return get_whitelist()
 
 @app.route("/api/whitelist")
@@ -651,7 +651,7 @@ def api_usb_control_toggle():
 def api_usb_guard_state():
     """Per-drive guard state: scanning / threat / clean_pending / trusted."""
     try:
-        from Main_Unit.Engine.Service.SentinelUSBGuard import get_state, port_locker_status
+        from Services.SentinelUSBGuard import get_state, port_locker_status
         return jsonify({
             "drives":      get_state(),
             "port_locked": port_locker_status() is False,  # False = USBSTOR disabled
@@ -667,7 +667,7 @@ def api_usb_guard_trust():
     if not letter:
         return jsonify({"error": "no letter"}), 400
     try:
-        from Main_Unit.Engine.Service.SentinelUSBGuard import get_guard, USBGuard
+        from Services.SentinelUSBGuard import get_guard, USBGuard
         guard = get_guard() or USBGuard(None, None)
         return jsonify(guard.trust_and_unlock(letter))
     except Exception as e:
@@ -680,7 +680,7 @@ def api_usb_guard_unlock():
     if not letter:
         return jsonify({"error": "no letter"}), 400
     try:
-        from Main_Unit.Engine.Service.SentinelUSBGuard import get_guard, USBGuard
+        from Services.SentinelUSBGuard import get_guard, USBGuard
         guard = get_guard() or USBGuard(None, None)
         return jsonify(guard.unlock(letter))
     except Exception as e:
@@ -691,7 +691,7 @@ def api_usb_guard_port_locker():
     """Smart port locker: globally enable/disable all USB mass-storage."""
     enabled = bool((request.json or {}).get("enabled", True))
     try:
-        from Main_Unit.Engine.Service.SentinelUSBGuard import set_port_locker
+        from Services.SentinelUSBGuard import set_port_locker
         return jsonify(set_port_locker(enabled))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -720,7 +720,7 @@ def api_auto_quarantine_set():
 @app.route("/api/vault")
 def api_vault_get():
     try:
-        import Main_Unit.Engine.Service.SentinelSecureVault as _sv
+        import Services.SentinelSecureVault as _sv
         files = _sv.list_files()
         # Normalise for display
         out = []
@@ -744,7 +744,7 @@ def api_vault_add():
     if not file_path:
         return jsonify({"error": "no file_path"}), 400
     try:
-        import Main_Unit.Engine.Service.SentinelSecureVault as _sv
+        import Services.SentinelSecureVault as _sv
         vault_id = _sv.add(file_path, password)
         return jsonify({"status": "added", "vault_id": vault_id})
     except Exception as e:
@@ -759,7 +759,7 @@ def api_vault_extract():
     if not vault_id:
         return jsonify({"error": "no vault_id"}), 400
     try:
-        import Main_Unit.Engine.Service.SentinelSecureVault as _sv
+        import Services.SentinelSecureVault as _sv
         # signature: extract(vault_id, dst_dir, password)
         path = _sv.extract(vault_id, dest, password)
         return jsonify({"status": "extracted", "path": path})
@@ -769,7 +769,7 @@ def api_vault_extract():
 @app.route("/api/vault/<vault_id>", methods=["DELETE"])
 def api_vault_delete(vault_id):
     try:
-        import Main_Unit.Engine.Service.SentinelSecureVault as _sv
+        import Services.SentinelSecureVault as _sv
         _sv.delete(vault_id)
         return jsonify({"status": "deleted"})
     except Exception as e:
@@ -985,8 +985,7 @@ def api_behavioral_rules_save():
 
 _YARA_USER_PATH = Path.home() / ".AriaSecurity" / "yara_rules"
 _YARA_PROJ_DIRS = [
-    _ROOT / "Main_Unit" / "Engine" / "Rules",
-    _ROOT / "Main_Unit" / "Engine" / "Rules" / "Main_Sys_Rules",
+    _ROOT / "Engine" / "Rules",
 ]
 
 @app.route("/api/yara_rules")
@@ -1105,7 +1104,7 @@ def api_abuse_lookup():
     if not key:
         return jsonify({"error": "No AbuseIPDB API key configured"}), 400
     try:
-        from Main_Unit.Engine.Service.SentinelThreatIntelligence import lookup_ip_abuseipdb
+        from Services.SentinelThreatIntelligence import lookup_ip_abuseipdb
         data = lookup_ip_abuseipdb(ip, key)
         if not data:
             return jsonify({"error": "No data returned"}), 404
@@ -1127,7 +1126,7 @@ def api_sandbox_detonate():
 
     def _do():
         try:
-            from Main_Unit.Engine.Service.SentinelSandbox import detonate
+            from Services.SentinelSandbox import detonate
             rep = detonate(file_path)
             result_holder["report"] = {
                 "verdict":     rep.verdict,
@@ -1222,7 +1221,7 @@ def api_memory_scan():
                             "exe": exe, "verdict": verdict,
                             "reasons": (result or {}).get("reasons", [])[:3],
                         })
-                        from Main_Unit.Engine.Service.SentinelBrain import ThreatCategory, ThreatSeverity
+                        from Services.SentinelBrain import ThreatCategory, ThreatSeverity
                         get_brain().emit_event(ThreatEvent(
                             category=ThreatCategory.MALWARE, severity=ThreatSeverity.CRITICAL,
                             title=f"Memory threat: {proc.info.get('name','?')} (PID {proc.info['pid']})",
@@ -1604,7 +1603,7 @@ def api_avbrain_model_status():
     exists = _AVB_MODEL_FILE.exists()
     llm_ok = False
     try:
-        from Main_Unit.Engine.Service.AVBrain import get_avbrain
+        from Services.AVBrain import get_avbrain
         llm_ok = get_avbrain().is_llm_available()
     except Exception:
         pass
@@ -1664,7 +1663,7 @@ def api_avbrain_model_download():
 
 def _avbrain_reload() -> bool:
     try:
-        from Main_Unit.Engine.Service.AVBrain import get_avbrain
+        from Services.AVBrain import get_avbrain
         return bool(get_avbrain().reload_model())
     except Exception as exc:
         print(f"[AVBrain] reload after download failed: {exc}")
@@ -1738,7 +1737,7 @@ def api_aria_chat():
         reply = None
         # Primary: AVBrain's Argus copilot, backed by the downloaded GGUF model.
         try:
-            from Main_Unit.Engine.Service.AVBrain import get_avbrain
+            from Services.AVBrain import get_avbrain
             av = get_avbrain()
             if av.is_llm_available():
                 reply = av.chat(msg)

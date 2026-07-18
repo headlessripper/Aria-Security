@@ -136,7 +136,7 @@ def _quarantine_file(file_path: str) -> Optional[Path]:
 
 def _emit_event(file_path: str, action: str, killed: int) -> None:
     try:
-        from Main_Unit.Engine.Service.SentinelBrain import (
+        from Services.SentinelBrain import (
             get_brain, ThreatEvent, ThreatCategory, ThreatSeverity,
         )
         detail = f"{action}"

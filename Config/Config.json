@@ -5,7 +5,7 @@
     "Suffix": [".com", ".dll", ".drv", ".exe", ".ocx", ".scr", ".sys", ".mui", ".cpl"],
     "Size": 268435456,
     "Sensitive": 95,
-    "Detection_Model_Path": "Engine/Model/Detection_Model/Engine_General_ZS1.onnx",
+    "Detection_Model_Path": "Engine/Model/Engine_General_ZS1.onnx",
     "virustotal_api_key": "1bdb6aec8a69dd996307bbb7b087393dcc1e3fd404062b1641ce04801815c1dd",
     "abuseipdb_api_key": "052579d2ae828eb078efcd8f49b56f59c6cb34f032dff0cbd7b3c2985a3d4f935193f501973fa319",
     "ransomware_protection": true,

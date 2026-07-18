@@ -6,7 +6,7 @@ import socket
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 from PySide6.QtGui import QColor
-from Main_Unit.Service.get_local_ip import get_local_ip
+from Interface.get_local_ip import get_local_ip
 
 APP_NAME = "Aria Security"  # Updated to match your AV branding
 COMPILER_VERSION = "SentinelCompiler_v5"
@@ -71,19 +71,19 @@ APP_DESCRIPTION = """
 
 BUILD_DATE = "2026-05-20"
 
-DETECTION_MODEL_PATH = "Engine/Model/Detection_Model/Engine_General_ZS1.onnx"
-SYSTEM_ICON_PATH = "Main_Unit/Service/Icon/Icon-48.png"
-SYSTEM_ICON_MID_PATH = "Main_Unit/Service/Icon/Icon-96.png"
-SYSTEM_ICON_BIG_PATH = "Main_Unit/Service/Icon/Icon-100.png"
-DANGER_ICON_PATH = "Main_Unit/Service/Icon/danger-48.png"
-CONFIG_PATH = "Main_Unit/Config.json"
-RULE_PATH = "Main_Unit/Engine/Rules/Main_Sys_Rules"
-HASH_FILE_PATH = "Main_Unit/Engine/Hashes/malware_hashes.txt"
-HASH256_FILE_PATH = "Main_Unit/Engine/Hashes/SHA256-Hashes.txt"
-IPS_FILE_PATH = "Main_Unit/Engine/Ips/Sentinel_Rules_B1.ips"
-WHITE_LIST_FILE_PATH = "Main_Unit/Engine/WhiteList/whitelist_ips.txt"
+DETECTION_MODEL_PATH = "Engine/Model/Engine_General_ZS1.onnx"
+SYSTEM_ICON_PATH = "Interface/Icons/Icon-48.png"
+SYSTEM_ICON_MID_PATH = "Interface/Icons/Icon-96.png"
+SYSTEM_ICON_BIG_PATH = "Interface/Icons/Icon-100.png"
+DANGER_ICON_PATH = "Interface/Icons/danger-48.png"
+CONFIG_PATH = "Config/Config.json"
+RULE_PATH = "Engine/Rules"
+HASH_FILE_PATH = "Engine/Signatures/malware_hashes.txt"
+HASH256_FILE_PATH = "Engine/Signatures/SHA256-Hashes.txt"
+IPS_FILE_PATH = "Engine/Signatures/Sentinel_Rules_B1.ips"
+WHITE_LIST_FILE_PATH = "Engine/Whitelist/whitelist_ips.txt"
 NET_LOG_LOGGING_FILE = "logs/NetPro.log"
-BEHAVIORAL_RULES_PATH = "Main_Unit/Engine/Rules/behavioral_rules.json"
+BEHAVIORAL_RULES_PATH = "Engine/Rules/behavioral_rules.json"
 SANDBOX_LOG_PATH = "logs/Sandbox.log"
 THREAT_INTEL_CACHE_DIR = str(Path.home() / ".AriaSecurity" / "ThreatIntel")
 

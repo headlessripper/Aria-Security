@@ -292,7 +292,7 @@ class USBGuard:
 
     def _emit_brain(self, letter: str, name: str, threats: list, scanned: int) -> None:
         try:
-            from Main_Unit.Engine.Service.SentinelBrain import (
+            from Services.SentinelBrain import (
                 get_brain, ThreatEvent, ThreatCategory, ThreatSeverity,
             )
             if threats:

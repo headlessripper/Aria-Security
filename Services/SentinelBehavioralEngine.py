@@ -51,16 +51,16 @@ import psutil
 import wmi
 from winotify import Notification, audio
 
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.Config.Sys_Config import SYSTEM_ICON_PATH
-from Main_Unit.find_items import find_items
+from Interface.write_to_log import write_to_log
+from Config.Sys_Config import SYSTEM_ICON_PATH
+from Interface.find_items import find_items
 
 def _get_brain():
-    from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+    from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
     return get_brain(), ThreatEvent, ThreatCategory, ThreatSeverity
 
 BEHAV_LOG = "logs/Behavioral.log"
-DEFAULT_RULES_PATH = "Main_Unit/Engine/Rules/behavioral_rules.json"
+DEFAULT_RULES_PATH = "Engine/Rules/behavioral_rules.json"
 
 BROWSER_PROCESS_NAMES = {
     'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',

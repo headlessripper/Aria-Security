@@ -30,7 +30,7 @@ Desktop.ini
 # (.exe = PyInstaller output, regenerable + slated for Phase 3 removal;
 #  .ips = compiled rules blob, regenerable from Rules-full.yar)
 Plugin/SentinelServices/*.exe
-Main_Unit/Engine/Ips/*.ips
+Engine/Signatures/*.ips
 
 # Subagent-driven-development scratch (progress ledger, briefs)
 .superpowers/

@@ -11,9 +11,9 @@ import subprocess
 import threading
 from collections import defaultdict, deque, OrderedDict
 from pathlib import Path
-from Main_Unit.Config.Sys_Config import SYSTEM_ICON_PATH
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.find_items import find_items as find_icon
+from Config.Sys_Config import SYSTEM_ICON_PATH
+from Interface.write_to_log import write_to_log
+from Interface.find_items import find_items as find_icon
 from winotify import Notification, audio
 
 import pydivert  # WinDivert
@@ -45,7 +45,7 @@ blocked_ips = set()
 
 def _get_brain():
     """Lazy import so the brain singleton is resolved at call-time, not module load."""
-    from Main_Unit.Engine.Service.SentinelBrain import get_brain
+    from Services.SentinelBrain import get_brain
     return get_brain()
 
 

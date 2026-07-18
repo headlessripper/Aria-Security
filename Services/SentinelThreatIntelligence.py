@@ -25,15 +25,15 @@ from datetime import datetime, timedelta
 
 import requests
 
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.Config.Sys_Config import (
+from Interface.write_to_log import write_to_log
+from Config.Sys_Config import (
     HASH_FILE_PATH, HASH256_FILE_PATH,
     IPS_FILE_PATH, WHITE_LIST_FILE_PATH,
 )
-from Main_Unit.find_items import find_items
+from Interface.find_items import find_items
 
 def _get_brain():
-    from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+    from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
     return get_brain(), ThreatEvent, ThreatCategory, ThreatSeverity
 
 INTEL_LOG = "logs/ThreatIntel.log"
@@ -448,7 +448,7 @@ class SentinelThreatIntelligence(threading.Thread):
 
     def _notify_nids_reload(self):
         try:
-            from Main_Unit.Engine.Service.SentinelServices.SentinelNetProtectionNG2 import (
+            from Services.Protection.SentinelNetProtectionNG2 import (
                 BLACKLIST, LOCKS
             )
             import re as _re

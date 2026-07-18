@@ -29,13 +29,13 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from winotify import Notification, audio
 
-from Main_Unit.Config.Sys_Config import SYSTEM_ICON_PATH, watch_dirs, SCAN_EXTENSIONS
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.find_items import find_items
+from Config.Sys_Config import SYSTEM_ICON_PATH, watch_dirs, SCAN_EXTENSIONS
+from Interface.write_to_log import write_to_log
+from Interface.find_items import find_items
 
 # Brain import is deferred to avoid circular imports at module load time
 def _get_brain():
-    from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+    from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
     return get_brain(), ThreatEvent, ThreatCategory, ThreatSeverity
 
 RANSOM_LOG = "logs/Ransom.log"

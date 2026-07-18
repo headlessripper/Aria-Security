@@ -57,7 +57,7 @@ try:
     from Sys_Config import APP_NAME
 except Exception:
     try:
-        from Main_Unit.Config.Sys_Config import APP_NAME
+        from Config.Sys_Config import APP_NAME
     except Exception:
         APP_NAME = "Aria Security"
 
@@ -65,7 +65,7 @@ try:
     from find_menu import find_menu
 except Exception:
     try:
-        from Main_Unit.Service.find_menu import find_menu
+        from Interface.find_menu import find_menu
     except Exception:
         def find_menu(p):  # type: ignore
             return p
@@ -74,7 +74,7 @@ try:
     from write_to_log import write_to_log
 except Exception:
     try:
-        from Main_Unit.Service.write_to_log import write_to_log
+        from Interface.write_to_log import write_to_log
     except Exception:
         def write_to_log(msg, path):  # type: ignore
             try:
@@ -88,7 +88,7 @@ except Exception:
     Notification = None  # type: ignore
     audio = None         # type: ignore
 
-SYSTEM_ICON_PATH = "menu/Icon-48.png"
+SYSTEM_ICON_PATH = "Interface/Menu/Icon-48.png"
 
 # =========================
 # PATHS / CONFIG

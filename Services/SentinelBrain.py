@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, Dict, List, Optional, Any
 
-from Main_Unit.Service.write_to_log import write_to_log
+from Interface.write_to_log import write_to_log
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ class SentinelBrain:
     Singleton central event bus.
 
     Usage (from any engine):
-        from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+        from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
         brain = get_brain()
         brain.emit_event(ThreatEvent(
             category=ThreatCategory.MALWARE,

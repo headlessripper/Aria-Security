@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from winotify import Notification, audio
 from pathlib import Path
 
-from Main_Unit.find_items import find_items
-from Main_Unit.Config.Sys_Config import (
+from Interface.find_items import find_items
+from Config.Sys_Config import (
     SYSTEM_ICON_PATH,
     APP_NAME,
     PE_EXTENSIONS,
@@ -19,9 +19,9 @@ from Main_Unit.Config.Sys_Config import (
     DETECTION_MODEL_PATH,
     HASH256_FILE_PATH,
 )
-from Main_Unit.Units.Engine_Unit_ML_v2 import model_scanner
-from Main_Unit.Units.Engine_Unit_SG import sign_scanner
-from Main_Unit.Service.write_to_log import write_to_log
+from Engine.Detection.Engine_Unit_ML_v2 import model_scanner
+from Engine.Detection.Engine_Unit_SG import sign_scanner
+from Interface.write_to_log import write_to_log
 
 
 def _llm_consult(file_path: str, reasons: list, details: dict) -> str | None:
@@ -245,7 +245,7 @@ class VirusScanner:
 
         # Whitelist check — skip entirely if the user trusts this file/path
         try:
-            from Main_Unit.Engine.Service.SentinelWhitelist import get_whitelist
+            from Services.SentinelWhitelist import get_whitelist
             wl = get_whitelist()
             if wl.is_whitelisted_file(str(file_path)):
                 return {'verdict': 'WHITELISTED', 'reasons': ['User-trusted path'], 'details': {}}
@@ -267,7 +267,7 @@ class VirusScanner:
         # Whitelist hash check — trust known-clean hashes
         if file_hash_sha256:
             try:
-                from Main_Unit.Engine.Service.SentinelWhitelist import get_whitelist
+                from Services.SentinelWhitelist import get_whitelist
                 if get_whitelist().is_whitelisted_hash(file_hash_sha256):
                     return {'verdict': 'WHITELISTED', 'reasons': ['User-trusted hash'],
                             'details': {'sha256': file_hash_sha256, 'md5': file_hash_md5}}
@@ -359,7 +359,7 @@ class VirusScanner:
         # Only fires when a VT API key is configured — no key, no request.
         if file_hash_sha256 and verdict != "MALWARE":
             try:
-                from Main_Unit.Engine.Service.SentinelCloudAnalysis import get_vt_client
+                from Services.SentinelCloudAnalysis import get_vt_client
                 vt = get_vt_client()
                 if vt._is_configured():
                     cloud = vt.check_hash(file_hash_sha256)
@@ -430,7 +430,7 @@ class VirusScanner:
         # Persist to scan history (non-blocking, best-effort)
         if verdict not in ("IGNORED", "WHITELISTED"):
             try:
-                from Main_Unit.Engine.Service.SentinelScanHistory import record
+                from Services.SentinelScanHistory import record
                 record(str(file_path), result)
             except Exception:
                 pass

@@ -17,9 +17,9 @@ from collections import deque
 
 import requests
 
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.Config.Sys_Config import CONFIG_PATH
-from Main_Unit.find_items import find_items
+from Interface.write_to_log import write_to_log
+from Config.Sys_Config import CONFIG_PATH
+from Interface.find_items import find_items
 
 CLOUD_LOG = "logs/CloudAnalysis.log"
 VT_BASE = "https://www.virustotal.com/api/v3"

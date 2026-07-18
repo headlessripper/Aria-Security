@@ -56,10 +56,10 @@ try:
 except ImportError:
     _LLAMA_AVAILABLE = False
 
-from Main_Unit.Engine.Service.SentinelBrain import (
+from Services.SentinelBrain import (
     get_brain, ThreatEvent, ThreatCategory, ThreatSeverity,
 )
-from Main_Unit.Service.write_to_log import write_to_log
+from Interface.write_to_log import write_to_log
 
 # ---------------------------------------------------------------------------
 # Config
@@ -420,7 +420,7 @@ class AVBrain:
     Singleton central AI intelligence.
 
     Lifecycle:
-        from Main_Unit.Engine.Service.AVBrain import get_avbrain
+        from Services.AVBrain import get_avbrain
         avbrain = get_avbrain()
         avbrain.start()   # call after SentinelService starts
         avbrain.stop()    # call on app quit

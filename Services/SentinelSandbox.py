@@ -33,8 +33,8 @@ from datetime import datetime
 
 import psutil
 
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.Config.Sys_Config import SYSTEM_ICON_PATH
+from Interface.write_to_log import write_to_log
+from Config.Sys_Config import SYSTEM_ICON_PATH
 
 SANDBOX_LOG = "logs/Sandbox.log"
 WSB_TEMPLATE = """\

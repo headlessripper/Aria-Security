@@ -12,70 +12,70 @@ from watchdog.events import FileSystemEventHandler
 import winreg
 from concurrent.futures import ThreadPoolExecutor
 
-from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
 
 # Headless, Qt-free executor: terminates running threats, auto-quarantines, and
 # emits brain events. The old Qt `Executioner` needs a running QApplication event
 # loop (which never runs under Flask/service), so threats queued into it were
 # never processed — that was the "Task N added to queue" dead-end bug.
 try:
-    from Main_Unit.Actions.SentinelExecutor import get_executor as _get_executor
+    from Actions.SentinelExecutor import get_executor as _get_executor
 except KeyboardInterrupt:
     raise
 except Exception:
     _get_executor = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Compiler.SentinelCompiler_v5 import VirusScanner
+    from Engine.Compiler.SentinelCompiler_v5 import VirusScanner
 except KeyboardInterrupt:
     raise
 except Exception:
     VirusScanner = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.SentinelServices.SentinelNetProtectionNG2 import SentinelAgentService as NetService
+    from Services.Protection.SentinelNetProtectionNG2 import SentinelAgentService as NetService
 except KeyboardInterrupt:
     raise
 except Exception:
     NetService = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.SentinelServices.Sentinelpsds import start as psds_start, stop as psds_stop
+    from Services.Protection.Sentinelpsds import start as psds_start, stop as psds_stop
 except KeyboardInterrupt:
     raise
 except Exception:
     psds_start = psds_stop = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.SentinelServices.SentinelRansomProtection import RansomProtectionController
+    from Services.Protection.SentinelRansomProtection import RansomProtectionController
 except KeyboardInterrupt:
     raise
 except Exception:
     RansomProtectionController = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.SentinelServices.SentinelExploitProtection import ExploitProtectionController
+    from Services.Protection.SentinelExploitProtection import ExploitProtectionController
 except KeyboardInterrupt:
     raise
 except Exception:
     ExploitProtectionController = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.SentinelBehavioralEngine import SentinelBehavioralEngine
+    from Services.SentinelBehavioralEngine import SentinelBehavioralEngine
 except KeyboardInterrupt:
     raise
 except Exception:
     SentinelBehavioralEngine = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.SentinelThreatIntelligence import SentinelThreatIntelligence
+    from Services.SentinelThreatIntelligence import SentinelThreatIntelligence
 except KeyboardInterrupt:
     raise
 except Exception:
     SentinelThreatIntelligence = None  # type: ignore
 
 try:
-    from Main_Unit.Engine.Service.AVBrain import get_avbrain
+    from Services.AVBrain import get_avbrain
 except KeyboardInterrupt:
     raise
 except Exception:
@@ -89,12 +89,12 @@ except Exception:
     _WINOTIFY = False
 
 try:
-    from Main_Unit.Config.Sys_Config import SYSTEM_ICON_PATH
+    from Config.Sys_Config import SYSTEM_ICON_PATH
 except Exception:
     SYSTEM_ICON_PATH = ""
 
 try:
-    from Main_Unit.find_items import find_items as find_icon
+    from Interface.find_items import find_items as find_icon
 except Exception:
     find_icon = None  # type: ignore
 
@@ -171,7 +171,7 @@ class USBDriveMonitor:
         self._running = False
         self._known_drives: set = set()
         # Callbacks: connect(fn) / emit(*args)
-        from Main_Unit.Engine.Service.SentinelBrain import _Signal
+        from Services.SentinelBrain import _Signal
         self.usb_scanning      = _Signal()   # (drive, name)
         self.usb_scan_complete = _Signal()   # (drive, name, threat_count)
         self.usb_inserted      = _Signal()   # (drive, name)
@@ -205,7 +205,7 @@ class USBDriveMonitor:
             import wmi as _wmi
             c = _wmi.WMI()
             watcher = c.Win32_VolumeChangeEvent.watch_for(EventType=2)
-            from Main_Unit.Service.write_to_log import write_to_log
+            from Interface.write_to_log import write_to_log
             write_to_log("[USB] WMI drive arrival watcher active", "logs/SystemSentinel.log")
             while self._running:
                 try:
@@ -272,7 +272,7 @@ class USBDriveMonitor:
             return ""
 
     def _scan_usb(self, drive_letter: str, device_name: str = "USB Drive"):
-        from Main_Unit.Service.write_to_log import write_to_log
+        from Interface.write_to_log import write_to_log
         drive_path = drive_letter + "\\"
         if not os.path.isdir(drive_path):
             self.usb_scan_complete.emit(drive_letter, device_name, 0)
@@ -289,7 +289,7 @@ class USBDriveMonitor:
         # quarantine → await trust). Fall back to the legacy inline scan only if
         # the guard isn't wired up.
         try:
-            from Main_Unit.Engine.Service.SentinelUSBGuard import get_guard
+            from Services.SentinelUSBGuard import get_guard
             guard = get_guard()
             if guard is not None:
                 self.usb_scanning.emit(drive_letter, device_name)
@@ -301,7 +301,7 @@ class USBDriveMonitor:
                          "logs/SystemSentinel.log")
 
         try:
-            from Main_Unit.Service.Pages.UsbAllowlistPage import is_usb_allowed
+            from Interface.Pages.UsbAllowlistPage import is_usb_allowed
             if instance_id and is_usb_allowed(instance_id):
                 write_to_log(f"[USB] {drive_letter} is in allowlist — scan skipped", "logs/SystemSentinel.log")
                 self.usb_inserted.emit(drive_letter, device_name)
@@ -404,7 +404,7 @@ class AnomalyHandler(FileSystemEventHandler):
         self.settings = settings
         self.scanner = scanner
         self.executor = executor
-        from Main_Unit.Engine.Service.SentinelBrain import _Signal
+        from Services.SentinelBrain import _Signal
         self.anomaly_detected = _Signal()  # (dir_path,)
 
     def on_any_event(self, event):
@@ -656,7 +656,7 @@ class _SenseThread(_ModuleThread):
 
     def _run(self):
         try:
-            from Main_Unit.SentinelSense.Sense.SentinelSense import SentinelSenseController
+            from Services.Sense.SentinelSense import SentinelSenseController
             self._controller = SentinelSenseController()
             self._controller.start()
             get_brain().set_module_running("SentinelSense", True)
@@ -695,7 +695,7 @@ class SentinelWorker:
         self.scan_executor = ThreadPoolExecutor(max_workers=2)
         self._scan_thread: Optional[threading.Thread] = None
 
-        from Main_Unit.Engine.Service.SentinelBrain import _Signal
+        from Services.SentinelBrain import _Signal
         self.display_status_changed = _Signal()  # (str,)
         self.status_changed         = _Signal()  # (str,)
         self.scanning_complete      = _Signal()  # (int,)
@@ -830,7 +830,7 @@ class SentinelService:
 
         # Wire the block-until-scanned USB Guard with the live scanner + executor.
         try:
-            from Main_Unit.Engine.Service.SentinelUSBGuard import init_guard
+            from Services.SentinelUSBGuard import init_guard
             init_guard(_scanner, _executor)
         except Exception as e:
             print(f"[USBGuard] init failed: {e}")

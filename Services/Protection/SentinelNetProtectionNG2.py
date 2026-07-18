@@ -26,12 +26,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 import pickle
 
-from Main_Unit.Config.Sys_Config import IPS_FILE_PATH, WHITE_LIST_FILE_PATH, SYSTEM_ICON_PATH
-from Main_Unit.Service.write_to_log import write_to_log
-from Main_Unit.find_items import find_items as find_icon
+from Config.Sys_Config import IPS_FILE_PATH, WHITE_LIST_FILE_PATH, SYSTEM_ICON_PATH
+from Interface.write_to_log import write_to_log
+from Interface.find_items import find_items as find_icon
 
 def _get_brain():
-    from Main_Unit.Engine.Service.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+    from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
     return get_brain(), ThreatEvent, ThreatCategory, ThreatSeverity
 
 # Try to import Scapy for packet sensor
@@ -392,8 +392,8 @@ _ABUSE_LOCK = threading.Lock()
 
 def _load_abuseipdb_key() -> str:
     try:
-        from Main_Unit.find_items import find_items
-        from Main_Unit.Config.Sys_Config import CONFIG_PATH
+        from Interface.find_items import find_items
+        from Config.Sys_Config import CONFIG_PATH
         cfg_path = find_items(CONFIG_PATH)
         if cfg_path and os.path.exists(cfg_path):
             import json as _json
@@ -413,7 +413,7 @@ def _query_abuseipdb_async(ip: str, api_key: str) -> None:
 
     def _do():
         try:
-            from Main_Unit.Engine.Service.SentinelThreatIntelligence import lookup_ip_abuseipdb
+            from Services.SentinelThreatIntelligence import lookup_ip_abuseipdb
             data = lookup_ip_abuseipdb(ip, api_key)
             if not data:
                 return
@@ -1024,7 +1024,7 @@ class AINetworkProtector:
         if ip in WHITELIST:
             return True
         try:
-            from Main_Unit.Engine.Service.SentinelWhitelist import get_whitelist
+            from Services.SentinelWhitelist import get_whitelist
             return get_whitelist().is_whitelisted_ip(ip)
         except Exception:
             return False
