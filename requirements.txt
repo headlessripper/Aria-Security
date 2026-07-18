@@ -1,0 +1,19 @@
+# Aria Security — Python dependencies
+flask
+flask-socketio
+pywebview
+pefile
+yara-python
+onnxruntime
+numpy
+scikit-learn
+pandas
+psutil
+winotify
+# Phase 2 detection engine
+lightgbm
+lief
+onnxmltools
+python-tlsh  # optional (TLSH fuzzy hashing); needs a C++ build on Windows — layer degrades to imphash-only if absent
+# dev
+pytest
