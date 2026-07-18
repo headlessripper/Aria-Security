@@ -26,9 +26,11 @@ class MLScanner:
         try:
             meta = json.loads(Path(meta_path).read_text())
             self.feature_version = meta.get("feature_version")
-            if self.feature_version != self.extractor.version:
+            if self.feature_version is not None and self.feature_version != self.extractor.version:
                 print(f"[MLScanner] feature_version mismatch: model={self.feature_version} "
                       f"extractor={self.extractor.version}")
+                self.session = None
+                return False
         except Exception:
             pass
         return True

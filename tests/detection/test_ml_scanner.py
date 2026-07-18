@@ -1,3 +1,5 @@
+import json
+
 from Engine.Properties.make_smoke_model import build
 from Engine.Detection.ml_scanner import MLScanner
 
@@ -24,3 +26,12 @@ def test_missing_model():
     s = MLScanner()
     assert s.load_file("does/not/exist.onnx") is False
     assert s.score("whatever") is None
+
+def test_feature_version_mismatch_refused(tmp_path):
+    onnx, feat = _tmp_model(tmp_path)
+    # tamper the metadata to an incompatible feature version
+    meta = json.loads(open(feat).read()); meta["feature_version"] = 999
+    open(feat, "w").write(json.dumps(meta))
+    s = MLScanner()
+    assert s.load_file(onnx, feat) is False        # refused
+    assert s.score("whatever") is None             # scoring disabled
