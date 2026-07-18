@@ -73,63 +73,11 @@ def _preload_service():
 
 threading.Thread(target=_preload_service, daemon=True, name="ServicePreload").start()
 
-# ── Background service executables ─────────────────────────────────────────────
-# Launch the Sentinel helper services on startup, but only if they are not
-# already running. Idempotent: safe to call repeatedly.
-_BG_SERVICES = [
-    _ROOT / "Plugin" / "SentinelServices" / "SentinelSenseService.exe",
-    _ROOT / "Plugin" / "SentinelServices" / "SentinelTaskAgent.exe",
-]
-
-def _is_process_running(exe_name: str) -> bool:
-    """Return True if a process with the given image name is already running."""
-    exe_name = exe_name.lower()
-    try:
-        import psutil
-        for proc in psutil.process_iter(["name"]):
-            try:
-                if (proc.info.get("name") or "").lower() == exe_name:
-                    return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        return False
-    except Exception:
-        # Fallback to tasklist if psutil is unavailable
-        try:
-            r = subprocess.run(
-                ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
-                capture_output=True, text=True, timeout=10,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            return exe_name in (r.stdout or "").lower()
-        except Exception:
-            return False
-
-def _launch_background_services() -> None:
-    """Start each helper exe if its image is not already running."""
-    DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-    NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-    for exe_path in _BG_SERVICES:
-        try:
-            if not exe_path.exists():
-                print(f"[Services] Skip (not found): {exe_path}")
-                continue
-            if _is_process_running(exe_path.name):
-                print(f"[Services] Already running: {exe_path.name}")
-                continue
-            subprocess.Popen(
-                [str(exe_path)],
-                cwd=str(exe_path.parent),
-                creationflags=DETACHED | NO_WINDOW,
-                close_fds=True,
-            )
-            print(f"[Services] Launched: {exe_path.name}")
-        except Exception as exc:
-            print(f"[Services] Failed to launch {exe_path.name}: {exc}")
-
-# Run in a daemon thread so a slow exe launch never blocks UI startup.
-threading.Thread(target=_launch_background_services, daemon=True,
-                 name="BgServiceLauncher").start()
+# ── Background service executables (removed) ──────────────────────────────────
+# The legacy Plugin/SentinelServices/*.exe helpers were deleted. SentinelSense
+# already runs in-process via SentinelService_v2 (SentinelSenseController), so the
+# compiled SentinelSenseService.exe was redundant; SentinelTaskAgent.exe is retired.
+# Any remaining background workers are started in-process by SentinelService_v2.
 
 # Config
 try:
