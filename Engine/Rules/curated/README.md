@@ -1,37 +1,42 @@
 # Curated YARA Rules
 
-Rules in this directory are loaded by Aria Security's YARA scan module
-(`RULE_PATH` in `Config/Sys_Config.py` points at `Engine/Rules`, whose
-recursive loader picks up this `curated/` subdirectory).
+Rules in this directory are intended to be loaded by Aria Security's YARA
+scan module (`RULE_PATH` in `Config/Sys_Config.py` points at
+`Engine/Rules`, whose recursive loader picks up this `curated/`
+subdirectory) — the scanner wiring itself lands in Task 9.
 
 ## Sources
 
-### Yara-Rules/rules (community set)
+### reversinglabs/reversinglabs-yara-rules (permissive set)
 
-- Repo: https://github.com/Yara-Rules/rules
-- Commit: `0f93570194a80d2f2032869055808b0ddcdfb360` (master, dated 2022-04-12)
-- License: GNU General Public License v2.0 (see repo's `LICENSE` file)
-- Files fetched (verbatim, unmodified) and kept because they compile
-  standalone with `yara-python` and require no external modules
-  (`pe`, `hash`, `math`, `elf`, etc.) or cross-file `include` statements:
+- Repo: https://github.com/reversinglabs/reversinglabs-yara-rules
+- Commit: `e0a0be54aa1e11ccfd6854e4f19e9476f328fd84` (`develop`, dated
+  2025-11-03)
+- **License: MIT** (see `LICENSE-reversinglabs.txt` in this directory for
+  the full notice, copied verbatim from the repo's `LICENSE` file)
+- Files fetched verbatim (only the `.yara` -> `.yar` extension was
+  changed to match this project's naming and the test harness's glob)
+  and kept because they compile standalone with `yara-python`, using
+  only the built-in `pe` module (or no module at all) and no cross-file
+  `include` statements:
 
-  | File | Original path in Yara-Rules/rules |
-  |---|---|
-  | `MALW_Eicar.yar` | `malware/MALW_Eicar.yar` |
-  | `000_common_rules.yar` | `malware/000_common_rules.yar` |
-  | `APT_Blackenergy.yar` | `malware/APT_Blackenergy.yar` |
-  | `RAT_Xtreme.yar` | `malware/RAT_Xtreme.yar` |
-  | `WShell_ASPXSpy.yar` | `webshells/WShell_ASPXSpy.yar` |
-  | `WShell_ChinaChopper.yar` | `webshells/WShell_ChinaChopper.yar` |
-  | `Wshell_ChineseSpam.yar` | `webshells/Wshell_ChineseSpam.yar` |
+  | File | Original path in reversinglabs-yara-rules | Uses `pe` module |
+  |---|---|---|
+  | `Win32.Trojan.TrickBot.yar` | `yara/trojan/Win32.Trojan.TrickBot.yara` | no |
+  | `Win32.Ransomware.Petya.yar` | `yara/ransomware/Win32.Ransomware.Petya.yara` | yes |
+  | `Win32.Trojan.HermeticWiper.yar` | `yara/trojan/Win32.Trojan.HermeticWiper.yara` | no |
+  | `Win32.Infostealer.StealC.yar` | `yara/infostealer/Win32.Infostealer.StealC.yara` | no |
+  | `Win32.Ransomware.Gpcode.yar` | `yara/ransomware/Win32.Ransomware.Gpcode.yara` | no |
 
   Several other candidate files from the same repo were tried and
-  discarded because they either failed to compile standalone (missing
-  `import "pe"` / `import "hash"` dependencies satisfied only when
-  compiled as part of the full repo's `index.yar`) or returned 404 at
-  the paths probed. Only files that pass `yara.compile()` on their own
-  were kept, per the task brief's rule: "if a fetched `.yar` fails to
-  compile (imports/deps), remove that file."
+  discarded: `Linux.Virus.Vit.yara` compiles standalone but imports the
+  `elf` module, which is outside this project's allowed module set
+  (`pe`/`math`/`hash` only); `certificate/blocklist.yara` was skipped for
+  size (~600 KB, a certificate-thumbprint blocklist, not a malware
+  detection rule); a few more `Win32.Virus.*` / `Win32.Downloader.*`
+  files were fetched, compiled cleanly, but left out to keep the curated
+  set small and high-signal (quality over quantity per the task brief).
+  Only files that pass `yara.compile()` on their own were kept.
 
 ### Self-authored
 
@@ -43,12 +48,16 @@ recursive loader picks up this `curated/` subdirectory).
 
 ## Attribution / license notes
 
-The Yara-Rules/rules project aggregates rules from many contributors;
-per-rule `author` metadata (where present) is preserved verbatim in
-each file's `meta:` block. The project as a whole is distributed under
-GPL-2.0; these files are redistributed here unmodified under the same
-license, alongside this project's own `aria_test.yar` (no license
-restriction, project-authored).
+The `Win32.*.yar` files above carry `author = "ReversingLabs"` and
+`source = "ReversingLabs"` in their own `meta:` blocks (preserved
+verbatim), and the containing repository is distributed under the MIT
+License. The MIT copyright notice and permission text are reproduced in
+`LICENSE-reversinglabs.txt` alongside this README, as required by the
+license. `aria_test.yar` is this project's own work (Aria Security), not
+subject to that license.
+
+**The curated ruleset as a whole is now permissively licensed (MIT +
+self-authored), replacing the previous GPL-2.0-sourced set.**
 
 ## Maintenance
 
@@ -59,7 +68,9 @@ before committing:
 .venv/Scripts/python.exe -c "import yara; yara.compile(filepath='Engine/Rules/curated/<file>.yar')"
 ```
 
-Files that require YARA modules (`pe`, `hash`, `math`, `elf`, `cuckoo`,
-`magic`) or `include` other files from outside this directory should
-not be added unless those dependencies are also vendored and wired
-into the scanner's compile step.
+Files that require YARA modules outside `pe`/`math`/`hash` (`elf`,
+`cuckoo`, `magic`, etc.) or `include` other files from outside this
+directory should not be added unless those dependencies are also
+vendored and wired into the scanner's compile step. Prefer sources with
+a permissive license (MIT/BSD/Apache-2.0) to keep the whole curated set
+license-compatible.
