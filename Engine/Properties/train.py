@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--out", default="Engine/Model/pe_detector.onnx")
     a = ap.parse_args()
     X, y = load(a.data, a.format)
+    assert X.shape[1] == DIM, f"expected {DIM} features per sample, got {X.shape[1]}"
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.1, random_state=42, stratify=y)
     model = lgb.train(PARAMS, lgb.Dataset(Xtr, label=ytr),
                       valid_sets=[lgb.Dataset(Xte, label=yte)],
