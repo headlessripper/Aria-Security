@@ -1,4 +1,5 @@
 import os
+import shutil
 import pytest
 from Engine.Detection.cert_reputation import CertReputation
 
@@ -35,5 +36,22 @@ def test_unsigned_file(tmp_path):
     p.write_bytes(b"MZ" + b"\x00" * 2048)
     cr = CertReputation()
     r = cr.evaluate(str(p))
+    assert r["trusted"] is False and r["signed"] is False
+    assert r["signature_type"] is None
+
+def test_tampered_catalog_binary_rejected(tmp_path):
+    src = None
+    for p in [r"C:\Windows\System32\notepad.exe", r"C:\Windows\System32\cmd.exe"]:
+        if os.path.exists(p):
+            src = p
+            break
+    if src is None:
+        pytest.skip("no candidate binary")
+    dst = tmp_path / "tampered.exe"
+    shutil.copy(src, dst)
+    data = bytearray(dst.read_bytes())
+    data[len(data) // 2] ^= 0xFF  # flip a middle byte
+    dst.write_bytes(data)
+    r = CertReputation().evaluate(str(dst))
     assert r["trusted"] is False and r["signed"] is False
     assert r["signature_type"] is None
