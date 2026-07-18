@@ -15,6 +15,7 @@ def test_fuzzy_match():
 def test_yara_hit():
     r = fuse({"yara": ["Win32_Trojan_X"]})
     assert r["verdict"] == "MALWARE"
+    assert r["confidence"] == 90
 
 def test_abused_signer():
     r = fuse({"cert": {"abused": True, "trusted": True}})
@@ -23,14 +24,17 @@ def test_abused_signer():
 def test_ml_high_untrusted_is_malware():
     r = fuse({"ml_prob": 0.95, "cert": {"trusted": False}})
     assert r["verdict"] == "MALWARE"
+    assert r["confidence"] == 85
 
 def test_ml_high_trusted_downgraded():
     r = fuse({"ml_prob": 0.95, "cert": {"trusted": True}})
     assert r["verdict"] == "SUSPICIOUS"
+    assert r["confidence"] == 65   # 85 - TRUST_CONF_RELIEF(20)
 
 def test_ml_medium_suspicious():
     r = fuse({"ml_prob": 0.6})
     assert r["verdict"] == "SUSPICIOUS"
+    assert r["confidence"] == 60          # int(0.6*100)
 
 def test_nothing_fires_clean():
     r = fuse({"ml_prob": 0.1, "cert": {"trusted": True}})
