@@ -1,0 +1,3 @@
+# Known-bad fuzzy-hash reference DB. One entry per line:
+#   imphash:<hex>   or   tlsh:<hash>
+# Populated in the post-dataset phase from a malware corpus.
