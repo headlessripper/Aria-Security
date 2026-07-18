@@ -18,8 +18,13 @@ from Config.Sys_Config import (
     HASH_FILE_PATH,
     DETECTION_MODEL_PATH,
     HASH256_FILE_PATH,
+    FUZZY_DB_PATH,
+    FEATURES_META_PATH,
 )
-from Engine.Detection.Engine_Unit_ML_v2 import model_scanner
+from Engine.Detection.ml_scanner import MLScanner
+from Engine.Detection.fuzzy_hash import FuzzyHasher
+from Engine.Detection.cert_reputation import CertReputation
+from Engine.Detection.fusion import fuse as _fuse
 from Engine.Detection.Engine_Unit_SG import sign_scanner
 from Interface.write_to_log import write_to_log
 
@@ -79,18 +84,18 @@ class VirusScanner:
         self.sign = sign_scanner()
         self.sign.init_windll(["wintrust"])
 
-        # Load ML model
+        # Load ML model (ONNX PE detector)
         write_to_log("Loading ML model...")
-        self.ml_scanner = model_scanner()
-        path_detection_model = find_items(DETECTION_MODEL_PATH)
-        model_path = path_detection_model
-        write_to_log(f"Model path: {model_path}")
-
-        if self.ml_scanner.load_file(model_path):
-            write_to_log(f"✅ Loaded model ({len(self.ml_scanner.models)})")
+        self.ml_scanner = MLScanner(threshold=0.5)
+        model_path = find_items(DETECTION_MODEL_PATH)
+        if model_path and self.ml_scanner.load_file(model_path, find_items(FEATURES_META_PATH)):
+            write_to_log("✅ Loaded ONNX PE detector")
         else:
-            write_to_log("❌ Model load failed")
-            write_to_log(f"  Path exists: {os.path.exists(model_path)}")
+            write_to_log("❌ ML model load failed (scanner will run without ML layer)")
+
+        # Fuzzy-hash and certificate-reputation layers
+        self.fuzzy = FuzzyHasher(db_path=find_items(FUZZY_DB_PATH))
+        self.cert = CertReputation()
 
         # Load virus hashes (MD5)
         write_to_log("Loading virus hash databases...")
@@ -252,10 +257,7 @@ class VirusScanner:
         except Exception:
             pass
 
-        verdict = "CLEAN"
-        reasons = []
         details = {}
-        layer_hits = 0  # Confirmed malware hits
 
         print(f"🔍 PE Analysis: {file_path}")
 
@@ -280,155 +282,55 @@ class VirusScanner:
             print(f"[CACHE HIT] {file_path}")
             return cached
 
-        is_md5_hit = file_hash_md5 in self.known_virus_hashes_md5 if file_hash_md5 else False
-        is_sha256_hit = file_hash_sha256 in self.known_virus_hashes_sha256 if file_hash_sha256 else False
-
-        if is_md5_hit or is_sha256_hit:
-            verdict = "MALWARE"
-            reasons.append("Known virus hash match")
-            layer_hits += 1
-
-        # YARA check (behavioral patterns)
-        matches = self.rules.match(file_path)
-        details['yara_matches'] = [
-            {'rule': m.rule, 'score': m.meta.get('score', 0)} for m in matches
-        ]
-        yara_high = any(m.meta.get('score', 0) >= 50 for m in matches)
-
-        if yara_high:
-            verdict = "MALWARE"
-            reasons.append("High-risk YARA rule")
-            layer_hits += 1
-        elif any(30 <= m.meta.get('score', 0) < 50 for m in matches):
-            reasons.append("Suspicious YARA rule")
-
-        # ML check (PE-specific malware classifier)
-        ml_malware = False
-        if self.ml_scanner.models:
-            ml_result = self.ml_scanner.model_scan(file_path)
-            if (
-                isinstance(ml_result, tuple)
-                and ml_result[0] in self.ml_scanner.detect_set
-                and isinstance(ml_result[1], int)
-                and ml_result[1] >= self.ml_scanner.min_confidence
-            ):
-                details['ml_label'] = ml_result[0]
-                details['ml_confidence'] = ml_result[1]
-
-                # SPECIAL EXCEPTION: Pefile/General (100%) = INSTANT MALWARE
-                if ml_result[0] == "Pefile/General" and ml_result[1] == 100:
-                    verdict = "MALWARE"
-                    reasons.append("CRITICAL ML HIT: Pefile/General (100%)")
-                    layer_hits += 1
-                    ml_malware = True
-                    print(f"*** IMMEDIATE THREAT: Pefile/General (100%) DETECTED ***")
-                elif "malware" in ml_result[0].lower():
-                    ml_malware = True
-                    layer_hits += 1
-                    reasons.append(f"ML malware detection ({ml_result[1]}%)")
-                else:
-                    reasons.append(f"ML suspicious ({ml_result[0]} {ml_result[1]}%)")
-
-        # Signature check (trust indicator)
-        try:
-            signed = self.sign.sign_verify(file_path)
-            details['signed'] = signed
-            if not signed:
-                reasons.append("Unsigned PE / untrusted")
-        except Exception as e:
-            reasons.append(f"Signature check failed: {e}")
-
-        # LLM tiebreaker — consulted only for borderline ML scores (60–90%)
-        # so the heavy model isn't loaded on obvious clean or confirmed malware.
-        ml_conf = details.get('ml_confidence', 0)
-        if verdict != "MALWARE" and 60 <= ml_conf <= 90:
+        # --- gather layer results ---
+        ml_prob = self.ml_scanner.score(file_path)
+        fuzzy_res = self.fuzzy.match(file_path)
+        cert_res = self.cert.evaluate(file_path)
+        yara_hits = []
+        if self.rules:
             try:
-                llm_verdict = _llm_consult(file_path, reasons, details)
-                if llm_verdict:
-                    details['llm_verdict'] = llm_verdict
-                    if llm_verdict.upper() == "MALWARE":
-                        verdict = "MALWARE"
-                        reasons.append(f"LLM escalated to MALWARE (ML borderline {ml_conf}%)")
-                        layer_hits += 1
-                    elif llm_verdict.upper() == "SUSPICIOUS":
-                        reasons.append(f"LLM flagged as SUSPICIOUS (ML borderline {ml_conf}%)")
-            except Exception as _llm_err:
-                details['llm_error'] = str(_llm_err)
+                yara_hits = [m.rule for m in self.rules.match(file_path)]
+            except Exception:
+                yara_hits = []
+        hash_exact = bool(
+            (file_hash_md5 and file_hash_md5 in self.known_virus_hashes_md5) or
+            (file_hash_sha256 and file_hash_sha256 in self.known_virus_hashes_sha256))
 
-        # Cloud verification: VirusTotal hash check for files not yet confirmed malware.
-        # Only fires when a VT API key is configured — no key, no request.
-        if file_hash_sha256 and verdict != "MALWARE":
+        decision = _fuse({
+            "whitelisted": False,  # whitelist already returned earlier
+            "hash_exact": hash_exact,
+            "fuzzy": fuzzy_res,
+            "yara": yara_hits,
+            "ml_prob": ml_prob,
+            "cert": cert_res,
+        })
+        result = {"verdict": decision["verdict"], "reasons": decision["reasons"],
+                  "details": {**details, **decision["details"],
+                              "md5": file_hash_md5, "sha256": file_hash_sha256,
+                              "confidence": decision["confidence"]}}
+
+        # User-facing alert for confirmed malware (orthogonal to fusion verdict)
+        if result["verdict"] == "MALWARE":
+            print(f"*** CONFIRMED PE MALWARE: {file_path} ***")
             try:
-                from Services.SentinelCloudAnalysis import get_vt_client
-                vt = get_vt_client()
-                if vt._is_configured():
-                    cloud = vt.check_hash(file_hash_sha256)
-                    details['vt_verdict'] = cloud.verdict_str
-                    details['vt_malicious'] = cloud.malicious
-                    details['vt_total'] = cloud.total_engines
-                    if cloud.is_threat:
-                        verdict = "MALWARE"
-                        reasons.append(
-                            f"VirusTotal: {cloud.malicious}/{cloud.total_engines} engines "
-                            f"({', '.join(cloud.threat_names[:2])})" if cloud.threat_names
-                            else f"VirusTotal: {cloud.malicious}/{cloud.total_engines} engines"
-                        )
-                        layer_hits += 1
-                    elif cloud.found and cloud.suspicious > 0:
-                        reasons.append(f"VirusTotal: {cloud.suspicious} suspicious detections")
+                toast = Notification(
+                    app_id=APP_NAME,
+                    title="Confirmed Malware",
+                    msg=f"Threats Found: {os.path.basename(file_path)}",
+                    icon=find_items(SYSTEM_ICON_PATH),
+                    duration="short"
+                )
+                toast.set_audio(audio.Default, loop=True)
+                toast.show()
             except Exception:
                 pass
-
-        # Final verdict logic
-        if layer_hits >= 2:
-            verdict = "MALWARE"
-        elif layer_hits == 1 and verdict != "MALWARE":
-            verdict = "SUSPICIOUS"
-        details['layer_hits'] = layer_hits
-
-        # Silent logging
-        if verdict == "MALWARE":
-            print(f"*** CONFIRMED PE MALWARE ({layer_hits}/4 layers) ***")
-            file_name = os.path.basename(file_path)
-
-            toast = Notification(
-                app_id=APP_NAME,
-                title="Confirmed Malware",
-                msg=f"Threats Found: {file_name}",
-                icon=find_items(SYSTEM_ICON_PATH),
-                duration="short"
-            )
-            toast.set_audio(audio.Default, loop=True)
-            toast.show()
-        elif verdict == "SUSPICIOUS":
-            print(f"Suspicious PE ({layer_hits}/4 layers)")
-        else:
-            print("Clean PE")
-
-        # Details (silent)
-        if details.get('md5'):
-            print(f"MD5: {details['md5']}")
-        if details.get('sha256'):
-            print(f"SHA256: {details['sha256']}")
-        for match in details.get('yara_matches', []):
-            print(f"YARA: {match['rule']} | Score {match['score']}")
-        if details.get('ml_label'):
-            print(f"ML: {details['ml_label']} ({details['ml_confidence']}%)")
-        if 'signed' in details:
-            print(f"Signed: {details['signed']}")
-
-        result = {
-            'verdict': verdict,
-            'reasons': reasons,
-            'details': details
-        }
 
         # Cache store
         if file_hash_sha256:
             self._verdict_cache[file_hash_sha256] = result
 
         # Persist to scan history (non-blocking, best-effort)
-        if verdict not in ("IGNORED", "WHITELISTED"):
+        if result["verdict"] not in ("IGNORED", "WHITELISTED"):
             try:
                 from Services.SentinelScanHistory import record
                 record(str(file_path), result)

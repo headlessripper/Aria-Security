@@ -1,12 +1,12 @@
 # scripts/verify_reachability.py
-"""Phase 1 invariant checker. Green = live set unchanged (28) and no live
-module resolves under cleanup/. Run from repo root."""
+"""Reachability invariant checker. Green = live set matches EXPECTED_LIVE and
+no live module resolves under cleanup/. Run from repo root."""
 import ast, os, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENTRY = ROOT / "SentinelUI_Flask.py"
-EXPECTED_LIVE = 28
+EXPECTED_LIVE = 31
 
 def index():
     by_dotted, by_stem = {}, {}

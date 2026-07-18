@@ -71,7 +71,9 @@ APP_DESCRIPTION = """
 
 BUILD_DATE = "2026-05-20"
 
-DETECTION_MODEL_PATH = "Engine/Model/Engine_General_ZS1.onnx"
+DETECTION_MODEL_PATH = "Engine/Model/pe_detector.onnx"
+FEATURES_META_PATH = "Engine/Model/features.json"
+FUZZY_DB_PATH = "Engine/Signatures/fuzzy_bad.txt"
 SYSTEM_ICON_PATH = "Interface/Icons/Icon-48.png"
 SYSTEM_ICON_MID_PATH = "Interface/Icons/Icon-96.png"
 SYSTEM_ICON_BIG_PATH = "Interface/Icons/Icon-100.png"
