@@ -25,19 +25,7 @@ from Engine.Detection.ml_scanner import MLScanner
 from Engine.Detection.fuzzy_hash import FuzzyHasher
 from Engine.Detection.cert_reputation import CertReputation
 from Engine.Detection.fusion import fuse as _fuse
-from Engine.Detection.Engine_Unit_SG import sign_scanner
 from Interface.write_to_log import write_to_log
-
-
-def _llm_consult(file_path: str, reasons: list, details: dict) -> str | None:
-    """
-    LLM-assisted verdict for borderline files.
-    Sentinel-R1 has been removed; AVBrain's LLM (Phi-3.5-mini) now handles
-    system-wide threat intelligence. Scan verdicts rely solely on the ONNX
-    ML engine + YARA + hash matching — no per-file LLM call needed.
-    Returns None so the caller falls back to its existing ML-only verdict.
-    """
-    return None
 
 
 class VirusScanner:
@@ -80,10 +68,6 @@ class VirusScanner:
 
     def _load_resources(self):
         """Load hashes, YARA rules, ML model, and signature scanner."""
-        # Initialize signature scanner
-        self.sign = sign_scanner()
-        self.sign.init_windll(["wintrust"])
-
         # Load ML model (ONNX PE detector)
         write_to_log("Loading ML model...")
         self.ml_scanner = MLScanner(threshold=0.5)
@@ -241,7 +225,7 @@ class VirusScanner:
     # ----------------------------------------
     def scan_file(self, file_path):
         """
-        Aggressively scan confirmed PE files with all 4 layers.
+        Aggressively scan confirmed PE files with all 5 layers (hash, fuzzy, YARA, ML, signature).
         Returns: {'verdict': str, 'reasons': list, 'details': dict}
         """
         # Only scan confirmed PE files
@@ -426,7 +410,7 @@ class VirusScanner:
         # Batch alert for confirmed PE malware only
         if notify_confirmed_only and confirmed_malware:
             reasons_summary = [
-                f"{d['details'].get('layer_hits', 0)}/4 layers: {', '.join(d['reasons'][:2])}"
+                ', '.join(d['reasons'][:2])
                 for d in confirmed_malware
             ]
 

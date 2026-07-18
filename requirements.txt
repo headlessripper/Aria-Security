@@ -12,7 +12,7 @@ psutil
 winotify
 # Phase 2 detection engine
 lightgbm
-lief
+lief>=0.14,<0.16  # Task 2 EMBER extractor targets the 0.15.x API
 onnxmltools
 python-tlsh  # optional (TLSH fuzzy hashing); needs a C++ build on Windows — layer degrades to imphash-only if absent
 # dev
