@@ -17,3 +17,4 @@ onnxmltools
 python-tlsh  # optional (TLSH fuzzy hashing); needs a C++ build on Windows — layer degrades to imphash-only if absent
 # dev
 pytest
+watchdog  # real-time file-system events (RansomProtection)
