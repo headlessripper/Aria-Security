@@ -47,25 +47,25 @@ except Exception:
     psds_start = psds_stop = None  # type: ignore
 
 try:
-    from Services.Protection.SentinelRansomProtection import RansomProtectionController
+    from Services.Protection.SentinelRansomProtection import RansomProtection
 except KeyboardInterrupt:
     raise
 except Exception:
-    RansomProtectionController = None  # type: ignore
+    RansomProtection = None  # type: ignore
 
 try:
-    from Services.Protection.SentinelExploitProtection import ExploitProtectionController
+    from Services.Protection.SentinelExploitProtection import ExploitProtection
 except KeyboardInterrupt:
     raise
 except Exception:
-    ExploitProtectionController = None  # type: ignore
+    ExploitProtection = None  # type: ignore
 
 try:
-    from Services.SentinelBehavioralEngine import SentinelBehavioralEngine
+    from Services.SentinelBehavioralEngine import BehavioralEngine
 except KeyboardInterrupt:
     raise
 except Exception:
-    SentinelBehavioralEngine = None  # type: ignore
+    BehavioralEngine = None  # type: ignore
 
 try:
     from Services.SentinelThreatIntelligence import SentinelThreatIntelligence
@@ -92,6 +92,11 @@ try:
     from Config.Sys_Config import SYSTEM_ICON_PATH
 except Exception:
     SYSTEM_ICON_PATH = ""
+
+try:
+    from Config.Sys_Config import watch_dirs as _RANSOM_WATCH_DIRS
+except Exception:
+    _RANSOM_WATCH_DIRS = []
 
 try:
     from Interface.find_items import find_items as find_icon
@@ -512,83 +517,45 @@ class _NetThread(_ModuleThread):
             pass
 
 
-class _RansomThread(_ModuleThread):
-    def __init__(self, ctrl):
-        super().__init__("RansomProtection")
-        self._ctrl = ctrl
+class _ServiceHolder:
+    """Thin uniform adapter around a new-style BaseService (RansomProtection /
+    ExploitProtection / BehavioralEngine).
 
-    def _run(self):
-        try:
-            self._ctrl.start()
-            get_brain().set_module_running("RansomProtection", True)
-        except Exception as e:
-            print(f"[RansomProtection] start error: {e}")
+    BaseService already manages its own worker thread AND self-reports its
+    module status to the brain via `set_module_running`, so this holder must
+    NOT spawn a second thread or duplicate the brain wiring — it simply exposes
+    the same `start()`/`stop()`/`isRunning()` surface the orchestrator uses for
+    the legacy `_ModuleThread` wrappers. If the service failed to construct
+    (import fell through to None), it degrades to a no-op.
+    """
+
+    def __init__(self, service):
+        self._svc = service
+        self._name = getattr(service, "name", "service") if service else "service"
+
+    def start(self):
+        if self._svc is None:
             return
-        self._stop_event.wait()
-
-    def _do_stop(self):
         try:
-            self._ctrl.stop()
-        except Exception:
-            pass
-        try:
-            get_brain().set_module_running("RansomProtection", False)
-        except Exception:
-            pass
-
-
-class _ExploitThread(_ModuleThread):
-    def __init__(self, ctrl):
-        super().__init__("ExploitProtection")
-        self._ctrl = ctrl
-
-    def _run(self):
-        try:
-            self._ctrl.start()
-            get_brain().set_module_running("ExploitProtection", True)
+            self._svc.start()
         except Exception as e:
-            print(f"[ExploitProtection] start error: {e}")
+            print(f"[{self._name}] start error: {e}")
+
+    def stop(self):
+        if self._svc is None:
             return
-        self._stop_event.wait()
-
-    def _do_stop(self):
         try:
-            self._ctrl.stop()
-        except Exception:
-            pass
-        try:
-            get_brain().set_module_running("ExploitProtection", False)
+            self._svc.stop()
         except Exception:
             pass
 
-
-class _BehavioralThread(_ModuleThread):
-    def __init__(self, executor):
-        super().__init__("BehavioralEngine")
-        self._executor = executor
-        self._engine = None
-
-    def _run(self):
+    def isRunning(self) -> bool:
+        if self._svc is None:
+            return False
         try:
-            self._engine = SentinelBehavioralEngine(executioner=self._executor)
-            self._engine.start()
-            get_brain().set_module_running("BehavioralEngine", True)
-        except Exception as e:
-            print(f"[BehavioralEngine] start error: {e}")
-            return
-        self._stop_event.wait()
-
-    def _do_stop(self):
-        if self._engine:
-            try:
-                self._engine.stop()
-            except Exception:
-                pass
-            self._engine = None
-        try:
-            get_brain().set_module_running("BehavioralEngine", False)
+            return bool(self._svc.is_running())
         except Exception:
-            pass
+            return False
 
 
 class _IntelThread(_ModuleThread):
@@ -824,8 +791,12 @@ class SentinelService:
         _scanner      = VirusScanner(max_workers=4) if VirusScanner else None
         _executor     = _get_executor() if _get_executor else None
         _net_svc      = NetService(interval=1.5) if NetService else None
-        _ransom_ctrl  = RansomProtectionController(enable_isolation=True, executioner=_executor) if RansomProtectionController else None
-        _exploit_ctrl = ExploitProtectionController() if ExploitProtectionController else None
+        # New-style BaseService protection services. Each manages its own worker
+        # thread and reports its own module status to the brain, so they're used
+        # directly (behind a thin _ServiceHolder), NOT wrapped in a _ModuleThread.
+        _ransom_svc   = RansomProtection(config={"watch_dirs": list(_RANSOM_WATCH_DIRS)}) if RansomProtection else None
+        _exploit_svc  = ExploitProtection() if ExploitProtection else None
+        _behav_svc    = BehavioralEngine() if BehavioralEngine else None
         _usb_mon      = USBDriveMonitor(_scanner, _executor)
 
         # Wire the block-until-scanned USB Guard with the live scanner + executor.
@@ -844,9 +815,9 @@ class SentinelService:
 
         self._psds_thread    = _PsdsThread()
         self._net_thread     = _NetThread(_net_svc)
-        self._ransom_thread  = _RansomThread(_ransom_ctrl)
-        self._exploit_thread = _ExploitThread(_exploit_ctrl)
-        self._behav_thread   = _BehavioralThread(_executor)
+        self._ransom_thread  = _ServiceHolder(_ransom_svc)
+        self._exploit_thread = _ServiceHolder(_exploit_svc)
+        self._behav_thread   = _ServiceHolder(_behav_svc)
         self._intel_thread   = _IntelThread()
         self._usb_thread     = _UsbThread(_usb_mon)
         self._sense_thread   = _SenseThread()
