@@ -25,27 +25,32 @@ class BaseService(ABC):
         self._state = ServiceState.STOPPED
         self._last_heartbeat = 0.0
         self._error: Optional[str] = None
+        self._started = threading.Event()
+        self._lock = threading.Lock()
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._error = None
-        self._state = ServiceState.STARTING
-        self._thread = threading.Thread(target=self._guarded_run, daemon=True, name=self.name)
-        self._thread.start()
-        self._state = ServiceState.RUNNING
-        self._set_module_running(True)
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._started.clear()
+            self._error = None
+            self._state = ServiceState.STARTING
+            self._thread = threading.Thread(target=self._guarded_run, daemon=True, name=self.name)
+            self._thread.start()
+        self._started.wait(timeout=2.0)   # worker signals once it is RUNNING
 
     def stop(self, timeout: float = 5.0) -> None:
-        self._state = ServiceState.STOPPING
-        self._stop_event.set()
+        with self._lock:
+            self._state = ServiceState.STOPPING
+            self._stop_event.set()
+            thread = self._thread
         try:
             self._teardown()
         except Exception as e:
             self._log(f"teardown error: {e}", "ERROR")
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        if thread:
+            thread.join(timeout=timeout)
         self._state = ServiceState.STOPPED
         self._set_module_running(False)
 
@@ -63,12 +68,18 @@ class BaseService(ABC):
         pass
 
     def _guarded_run(self) -> None:
+        self._state = ServiceState.RUNNING
+        self._set_module_running(True)
+        self._started.set()
         try:
             self._run()
         except Exception as e:
             self._error = f"{e}\n{traceback.format_exc()}"
             self._state = ServiceState.ERROR
             self._log(f"_run crashed: {e}", "ERROR")
+        finally:
+            if self._state != ServiceState.STOPPING:
+                self._set_module_running(False)
 
     def _stopping(self) -> bool:
         return self._stop_event.is_set()
@@ -94,13 +105,17 @@ class BaseService(ABC):
 
     def emit_block(self, ip: str, reason: str) -> None:
         if self._brain:
-            try: self._brain.emit_block(ip, reason)
-            except Exception: pass
+            try:
+                self._brain.emit_block(ip, reason)
+            except Exception as e:
+                self._log(f"emit_block failed: {e}", "ERROR")
 
     def _set_module_running(self, running: bool) -> None:
         if self._brain:
-            try: self._brain.set_module_running(self.name, running)
-            except Exception: pass
+            try:
+                self._brain.set_module_running(self.name, running)
+            except Exception as e:
+                self._log(f"set_module_running failed: {e}", "ERROR")
 
     def _log(self, msg: str, level: str = "INFO") -> None:
         print(f"[{self.name}] {level}: {msg}")

@@ -30,7 +30,7 @@ def test_stop_is_prompt(fake_brain):
     s.start()
     t0 = time.time()
     s.stop(timeout=2)
-    assert time.time() - t0 < 1.5  # cooperative stop, not the full timeout
+    assert time.time() - t0 < 0.5  # cooperative stop, not the full timeout
 
 def test_idempotent_start(fake_brain):
     s = _Echo(brain=fake_brain)
@@ -52,4 +52,13 @@ def test_run_crash_sets_error_not_process(fake_brain):
     s.start()
     time.sleep(0.15)
     assert s.health()["state"] == "ERROR"   # crashed internally, process still alive
+    s.stop()
+
+def test_crashed_service_reports_error_and_module_off(fake_brain):
+    s = _Crash(brain=fake_brain)
+    s.start()
+    time.sleep(0.1)
+    assert s.health()["state"] == "ERROR"
+    assert s.is_running() is False
+    assert fake_brain.module_states.get("CrashSvc") is False   # crash resets module_running
     s.stop()
