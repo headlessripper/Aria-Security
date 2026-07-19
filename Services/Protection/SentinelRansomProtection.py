@@ -65,6 +65,11 @@ _DEFAULTS = {
     "entropy_sample_bytes": 8192,
     "canary_count": 3,
     "ransom_extensions": [".locked", ".crypto", ".enc", ".ryk", ".crypt", ".wcry"],
+    # Naturally high-entropy formats: skip the entropy detector to avoid FPs.
+    "skip_entropy_extensions": [
+        ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mkv", ".avi", ".mov",
+        ".mp3", ".zip", ".7z", ".rar", ".gz", ".docx", ".xlsx", ".pptx", ".pdf",
+    ],
     "action": "auto",                 # auto | alert_only | always_suspend
     "protected_images": ["explorer.exe", "system", "svchost.exe", "csrss.exe"],
 }
@@ -83,17 +88,27 @@ class _RansomEventHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
-        self._service._handle_fs_event(event.src_path, kind="created")
+        self._service._handle_fs_event("created", event.src_path)
 
     def on_modified(self, event):
         if event.is_directory:
             return
-        self._service._handle_fs_event(event.src_path, kind="modified")
+        self._service._handle_fs_event("modified", event.src_path)
 
     def on_moved(self, event):
         if event.is_directory:
             return
-        self._service._handle_fs_event(event.dest_path, kind="moved")
+        # Feed BOTH the original and the new path: a rename-to-encrypt
+        # (canary -> canary.locked) must be seen at the ORIGINAL path (canary
+        # trip) AND at the destination (extension trip).
+        self._service._handle_fs_event("moved", event.src_path, event.dest_path)
+
+    def on_deleted(self, event):
+        if event.is_directory:
+            return
+        # A deleted canary (or wiper/mass-delete behaviour) must not be
+        # invisible: route the removed path through detection too.
+        self._service._handle_fs_event("deleted", event.src_path)
 
 
 class RansomProtection(BaseService):
@@ -103,9 +118,14 @@ class RansomProtection(BaseService):
         cfg = dict(_DEFAULTS); cfg.update(config or {})
         super().__init__(cfg, brain)
         self._window = _Window()
-        self._recent_trips: deque = deque()   # (ts, reason) for multi-detector correlation
+        # (ts, path, reason) for per-FILE multi-detector correlation.
+        self._recent_trips: deque = deque()
         self._canaries: set[str] = set()
         self._observer = None
+        # Guards the shared mutable detector state (_window, _recent_trips,
+        # _canaries) against watchdog's multiple emitter threads. This is a
+        # dedicated lock, NOT BaseService._lock (which guards start/stop).
+        self._state_lock = threading.Lock()
 
     # --- detection helpers (pinned by tests) ---
     def _pid_is_protected(self, pid) -> bool:
@@ -161,6 +181,9 @@ class RansomProtection(BaseService):
         return self._window.count(ts, seconds) > threshold
 
     def _detect_entropy(self, path: str) -> bool:
+        suffix = Path(path).suffix.lower()
+        if suffix in {e.lower() for e in self.config.get("skip_entropy_extensions", [])}:
+            return False  # naturally high-entropy format -> not a signal
         try:
             sample_size = self.config["entropy_sample_bytes"]
             with open(path, "rb") as f:
@@ -178,28 +201,30 @@ class RansomProtection(BaseService):
         suffix = Path(path).suffix.lower()
         return suffix in {e.lower() for e in self.config["ransom_extensions"]}
 
-    def _record_trip_reason(self, reason: str, ts: float) -> None:
-        self._recent_trips.append((ts, reason))
+    def _record_trip_reason(self, path: str, reason: str, ts: float) -> None:
+        self._recent_trips.append((ts, path, reason))
         seconds = self.config["window_seconds"]
         cutoff = ts - seconds
         while self._recent_trips and self._recent_trips[0][0] < cutoff:
             self._recent_trips.popleft()
 
-    def _correlated_reasons(self, now: float) -> set:
+    def _correlated_reasons(self, path: str, now: float) -> set:
+        # Per-FILE correlation: only reasons tripped for the SAME path within
+        # the window combine. This stops two unrelated single-detector trips on
+        # DIFFERENT files from faking a >=2-detector high-confidence suspend.
         seconds = self.config["window_seconds"]
         cutoff = now - seconds
-        return {reason for (ts, reason) in self._recent_trips if ts > cutoff}
+        return {reason for (ts, p, reason) in self._recent_trips
+                if p == path and ts > cutoff}
 
-    # --- event handling: run all detectors on an incoming fs event ---
-    def _handle_fs_event(self, path: str, kind: str) -> None:
-        now = time.time()
+    def _evaluate_path(self, path: str, now: float, velocity: bool,
+                       check_extension: bool, check_entropy: bool) -> set:
+        """Run the per-file detectors for `path`, record/correlate reasons, and
+        return the correlated reason-set for THIS path (empty if nothing tripped
+        on it). Must be called while holding `self._state_lock`."""
         reasons: set = set()
-
-        try:
-            if self._detect_velocity(now):
-                reasons.add("velocity")
-        except Exception:
-            pass
+        if velocity:
+            reasons.add("velocity")
 
         try:
             if self._detect_canary(path):
@@ -207,14 +232,14 @@ class RansomProtection(BaseService):
         except Exception:
             pass
 
-        if kind in ("created", "moved"):
+        if check_extension:
             try:
                 if self._detect_extension(path):
                     reasons.add("extension")
             except Exception:
                 pass
 
-        if kind == "modified":
+        if check_entropy:
             try:
                 if self._detect_entropy(path):
                     reasons.add("entropy")
@@ -222,26 +247,62 @@ class RansomProtection(BaseService):
                 pass
 
         if not reasons:
-            return
+            return set()
 
         for reason in reasons:
-            self._record_trip_reason(reason, now)
+            self._record_trip_reason(path, reason, now)
+        return self._correlated_reasons(path, now)
 
-        # Correlate with any other reasons tripped by recent events in the
-        # same window (e.g. an extension-rename followed shortly by an
-        # entropy-spiking write on a different file) for the >=2-detector
-        # high-confidence path.
-        correlated = self._correlated_reasons(now) | reasons
+    # --- event handling: run all detectors on an incoming fs event ---
+    def _handle_fs_event(self, kind: str, src_path: str, dest_path: str = None) -> None:
+        now = time.time()
+        to_trip: list = []  # (correlated_reasons, path) computed under the lock
 
-        try:
-            pid = self._pid_for_path(path)
-        except Exception:
-            pid = None
+        # Hold the state lock while touching _window / _recent_trips / _canaries;
+        # release it before the (potentially slow) _on_trip / suspend work.
+        with self._state_lock:
+            # Velocity is a single global signal: count each fs event exactly
+            # once (including a move), attributed to this event's primary path.
+            velocity_tripped = False
+            try:
+                if self._detect_velocity(now):
+                    velocity_tripped = True
+            except Exception:
+                pass
 
-        try:
-            self._on_trip(correlated, path, pid)
-        except Exception:
-            pass
+            # For moves the destination is the "new" file (extension/entropy),
+            # for everything else the primary path is src_path.
+            primary = dest_path if (kind == "moved" and dest_path) else src_path
+
+            if primary:
+                correlated = self._evaluate_path(
+                    primary, now,
+                    velocity=velocity_tripped,
+                    check_extension=kind in ("created", "moved"),
+                    check_entropy=(kind == "modified"),
+                )
+                if correlated:
+                    to_trip.append((correlated, primary))
+
+            # A canary being moved/renamed/deleted AWAY from its seeded path is a
+            # canary trip: check the ORIGINAL path on moves/deletes too.
+            if kind == "moved" and src_path and src_path != primary:
+                correlated = self._evaluate_path(
+                    src_path, now,
+                    velocity=False, check_extension=False, check_entropy=False,
+                )
+                if correlated:
+                    to_trip.append((correlated, src_path))
+
+        for correlated, path in to_trip:
+            try:
+                pid = self._pid_for_path(path)
+            except Exception:
+                pid = None
+            try:
+                self._on_trip(correlated, path, pid)
+            except Exception:
+                pass
 
     def _pid_for_path(self, path: str):
         """Best-effort lookup of the process currently holding path open.
@@ -277,18 +338,22 @@ class RansomProtection(BaseService):
                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     except Exception:
                         pass
-                    self._canaries.add(canary_path)
+                    with self._state_lock:
+                        self._canaries.add(canary_path)
                 except OSError:
                     continue
 
     def _remove_canaries(self) -> None:
-        for canary_path in list(self._canaries):
+        with self._state_lock:
+            paths = list(self._canaries)
+        for canary_path in paths:
             try:
                 if os.path.exists(canary_path):
                     os.remove(canary_path)
             except OSError:
                 pass
-        self._canaries.clear()
+        with self._state_lock:
+            self._canaries.clear()
 
     # --- watchdog wiring ---
     def _run(self) -> None:
@@ -298,9 +363,23 @@ class RansomProtection(BaseService):
         if watch_dirs and Observer is not None:
             handler = _RansomEventHandler(self)
             self._observer = Observer()
+            scheduled = 0
             for directory in watch_dirs:
-                self._observer.schedule(handler, path=directory, recursive=True)
-            self._observer.start()
+                # Isolate each watch: one bad/inaccessible directory must not
+                # crash _run and permanently ERROR the whole service.
+                try:
+                    self._observer.schedule(handler, path=directory, recursive=True)
+                    scheduled += 1
+                except Exception as e:
+                    self._log(f"failed to watch {directory}: {e}", "ERROR")
+            if scheduled:
+                try:
+                    self._observer.start()
+                except Exception as e:
+                    self._log(f"observer start failed: {e}", "ERROR")
+                    self._observer = None
+            else:
+                self._observer = None
 
         self._heartbeat()
         while not self._stopping():
