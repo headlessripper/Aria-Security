@@ -1,29 +1,34 @@
 # SentinelThreatIntelligence.py
-# Pulls live threat data from free public feeds and updates the local blacklists.
+# Pulls live threat data from free public feeds and feeds the shared
+# ThreatIntelStore (consumed by NetworkProtection / IOC matching).
 #
 # Feeds used (all free, no API key required for basic use):
 #   - URLhaus (abuse.ch): malware URLs and hashes
 #   - MalwareBazaar (abuse.ch): malware hash database
 #   - Feodo Tracker (abuse.ch): botnet C2 IP blocklist
 #   - CINS Score: community IP reputation
+#   - Emerging Threats: compromised IP list
 #   - AbuseIPDB: IP reputation (requires free API key for >1k/day)
 #
-# Runs on a background thread, updates local files, notifies via HOT_SWAP.
+# Runs as a BaseService: `_run` loads any persisted blocklist, then loops,
+# pulling each feed on its own refresh cadence and pushing IOCs into the
+# shared ThreatIntelStore.
 
+from __future__ import annotations
+
+import ipaddress
+import json
 import os
 import re
-import csv
-import gzip
-import time
-import json
-import hashlib
-import threading
-import io
 from pathlib import Path
-from typing import Set, Dict, Optional, List
+from typing import Dict, Optional, Set, Tuple
 from datetime import datetime, timedelta
 
 import requests
+
+from Services.framework.base_service import BaseService
+from Services.SentinelBrain import ThreatCategory, ThreatSeverity
+from Services.Protection.threat_intel_store import get_intel_store
 
 from Interface.write_to_log import write_to_log
 from Config.Sys_Config import (
@@ -32,15 +37,11 @@ from Config.Sys_Config import (
 )
 from Interface.find_items import find_items
 
-def _get_brain():
-    from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
-    return get_brain(), ThreatEvent, ThreatCategory, ThreatSeverity
-
 INTEL_LOG = "logs/ThreatIntel.log"
 INTEL_CACHE_DIR = Path.home() / ".AriaSecurity" / "ThreatIntel"
 INTEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-UPDATE_INTERVAL_HOURS = 4  # refresh feeds every 4 hours
+UPDATE_INTERVAL_HOURS = 4  # default refresh cadence when a feed doesn't override it
 REQUEST_TIMEOUT = 30
 
 
@@ -85,12 +86,65 @@ FEEDS = {
     },
 }
 
-_IP_RE = re.compile(
-    r'\b(?:(?:25[0-5]|2[0-4]\d|1?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|1?\d{1,2})\b'
-)
-_SHA256_RE = re.compile(r'\b[0-9a-fA-F]{64}\b')
-_MD5_RE = re.compile(r'\b[0-9a-fA-F]{32}\b')
 
+# ---------------------------------------------------------------------------
+# Pure feed parsers (pinned by tests/services/test_threat_intelligence.py)
+# ---------------------------------------------------------------------------
+
+def parse_ip_list(text: str) -> Set[str]:
+    """Parse a plaintext IP-list feed: skips blank lines and '#'/';' comments,
+    tolerates trailing comma-separated junk, validates each first token as
+    an actual IP address."""
+    ips = set()
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line[0] in "#;":
+            continue
+        tok = line.replace(",", " ").split()[0]
+        try:
+            ipaddress.ip_address(tok)
+            ips.add(tok)
+        except ValueError:
+            pass
+    return ips
+
+
+def parse_hashes(content) -> Tuple[Set[str], Set[str]]:
+    """Parse hash feed content (bytes or str). JSON-tolerant with a hex-regex
+    fallback so arbitrary feed text still yields any SHA256/MD5 hashes present.
+    Returns (sha256_set, md5_set)."""
+    text = content.decode("utf-8", "ignore") if isinstance(content, (bytes, bytearray)) else (content or "")
+    sha = {m.lower() for m in re.findall(r"\b[a-fA-F0-9]{64}\b", text)}
+    md5 = {m.lower() for m in re.findall(r"\b[a-fA-F0-9]{32}\b", text)}
+    return sha, md5
+
+
+def _parse_urlhaus_hash_json(content) -> Tuple[Set[str], Set[str]]:
+    """URLhaus downloads endpoint returns a JSON array of entries with their
+    own sha256_hash/md5_hash keys; fall back to the generic regex parser if
+    the payload isn't the expected shape."""
+    sha256s: Set[str] = set()
+    md5s: Set[str] = set()
+    try:
+        data = json.loads(content)
+        for entry in data:
+            if isinstance(entry, dict):
+                h = entry.get('sha256_hash') or entry.get('sha256', '')
+                if h and len(h) == 64:
+                    sha256s.add(h.lower())
+                m = entry.get('md5_hash') or entry.get('md5', '')
+                if m and len(m) == 32:
+                    md5s.add(m.lower())
+        if sha256s or md5s:
+            return sha256s, md5s
+    except Exception as e:
+        _log(f"URLhaus JSON parse error, falling back to regex: {e}")
+    return parse_hashes(content)
+
+
+# ---------------------------------------------------------------------------
+# Persisted "last update" bookkeeping (per-feed cadence tracking)
+# ---------------------------------------------------------------------------
 
 def _load_last_update() -> Dict:
     path = INTEL_CACHE_DIR / "last_update.json"
@@ -116,114 +170,20 @@ def _needs_update(feed_name: str, update_hours: int, last_update: Dict) -> bool:
     ts = last_update.get(feed_name)
     if not ts:
         return True
-    last = datetime.fromisoformat(ts)
+    try:
+        last = datetime.fromisoformat(ts)
+    except Exception:
+        return True
     return datetime.now() - last > timedelta(hours=update_hours)
 
 
 # ---------------------------------------------------------------------------
-# Feed parsers
+# On-disk blocklist persistence (kept for continuity with older consumers /
+# offline restarts — the in-memory ThreatIntelStore is the live source of
+# truth for lookups).
 # ---------------------------------------------------------------------------
 
-def _parse_ip_list(text: str) -> Set[str]:
-    ips = set()
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        m = _IP_RE.search(line)
-        if m:
-            ips.add(m.group())
-    return ips
-
-
-def _parse_urlhaus_hash_json(content: bytes) -> tuple[Set[str], Set[str]]:
-    sha256s: Set[str] = set()
-    md5s: Set[str] = set()
-    try:
-        data = json.loads(content)
-        for entry in data:
-            if isinstance(entry, dict):
-                h = entry.get('sha256_hash') or entry.get('sha256', '')
-                if h and len(h) == 64:
-                    sha256s.add(h.lower())
-                m = entry.get('md5_hash') or entry.get('md5', '')
-                if m and len(m) == 32:
-                    md5s.add(m.lower())
-    except Exception as e:
-        _log(f"URLhaus parse error: {e}")
-    return sha256s, md5s
-
-
-def _fetch_malwarebazaar_recent() -> tuple[Set[str], Set[str]]:
-    sha256s: Set[str] = set()
-    md5s: Set[str] = set()
-    try:
-        resp = requests.post(
-            "https://mb-api.abuse.ch/api/v1/",
-            data={"query": "get_recent", "selector": "100"},
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("query_status") == "ok":
-            for entry in data.get("data", []):
-                h = entry.get("sha256_hash", "")
-                if h:
-                    sha256s.add(h.lower())
-                m = entry.get("md5_hash", "")
-                if m:
-                    md5s.add(m.lower())
-    except Exception as e:
-        _log(f"MalwareBazaar fetch error: {e}")
-    return sha256s, md5s
-
-
-def lookup_hash_malwarebazaar(sha256: str) -> Optional[Dict]:
-    """
-    Query MalwareBazaar for a specific hash.
-    Returns threat info dict or None if not found.
-    """
-    try:
-        resp = requests.post(
-            "https://mb-api.abuse.ch/api/v1/",
-            data={"query": "get_info", "hash": sha256},
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("query_status") == "ok":
-            return data.get("data", [{}])[0]
-    except Exception as e:
-        _log(f"MalwareBazaar hash lookup error: {e}")
-    return None
-
-
-def lookup_ip_abuseipdb(ip: str, api_key: str) -> Optional[Dict]:
-    """
-    Query AbuseIPDB for an IP's reputation (requires free API key).
-    Returns dict with abuseConfidenceScore, totalReports, etc.
-    """
-    if not api_key:
-        return None
-    try:
-        resp = requests.get(
-            "https://api.abuseipdb.com/api/v2/check",
-            headers={"Key": api_key, "Accept": "application/json"},
-            params={"ipAddress": ip, "maxAgeInDays": 30},
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json().get("data")
-    except Exception as e:
-        _log(f"AbuseIPDB lookup error for {ip}: {e}")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# File updater
-# ---------------------------------------------------------------------------
-
-def _append_unique_lines(path: str, new_entries: Set[str], comment_header: str = ""):
+def _append_unique_lines(path: str, new_entries: Set[str], comment_header: str = "") -> int:
     """Append only new entries to a file, avoiding duplicates."""
     try:
         existing: Set[str] = set()
@@ -248,155 +208,167 @@ def _append_unique_lines(path: str, new_entries: Set[str], comment_header: str =
         return 0
 
 
-def _overwrite_with_merged(path: str, new_entries: Set[str]):
-    """Merge new entries with existing, dedup, write back."""
-    existing: Set[str] = set()
+def _load_ip_file(path: str) -> Set[str]:
     try:
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        existing.add(line.lower())
-        merged = existing | {e.lower() for e in new_entries}
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(f"# Updated: {datetime.now().isoformat()}\n")
-            for entry in sorted(merged):
-                f.write(entry + "\n")
-        return len(merged) - len(existing)
+                return parse_ip_list(f.read())
     except Exception as e:
-        _log(f"Merge error ({path}): {e}")
-        return 0
+        _log(f"Blocklist load error ({path}): {e}")
+    return set()
+
+
+# ---------------------------------------------------------------------------
+# AbuseIPDB on-demand lookup (kept as a module-level helper; not part of the
+# scheduled feed loop since it requires a per-IP call and an API key)
+# ---------------------------------------------------------------------------
+
+def lookup_ip_abuseipdb(ip: str, api_key: str) -> Optional[Dict]:
+    """
+    Query AbuseIPDB for an IP's reputation (requires free API key).
+    Returns dict with abuseConfidenceScore, totalReports, etc.
+    """
+    if not api_key:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.abuseipdb.com/api/v2/check",
+            headers={"Key": api_key, "Accept": "application/json"},
+            params={"ipAddress": ip, "maxAgeInDays": 30},
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("data")
+    except Exception as e:
+        _log(f"AbuseIPDB lookup error for {ip}: {e}")
+    return None
+
+
+def lookup_hash_malwarebazaar(sha256: str) -> Optional[Dict]:
+    """Query MalwareBazaar for a specific hash. Returns threat info dict or None."""
+    try:
+        resp = requests.post(
+            "https://mb-api.abuse.ch/api/v1/",
+            data={"query": "get_info", "hash": sha256},
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("query_status") == "ok":
+            return data.get("data", [{}])[0]
+    except Exception as e:
+        _log(f"MalwareBazaar hash lookup error: {e}")
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Main intelligence service
 # ---------------------------------------------------------------------------
 
-class SentinelThreatIntelligence(threading.Thread):
+class ThreatIntelligence(BaseService):
     """
-    Background thread that keeps local blocklists fresh from public threat feeds.
+    Keeps the shared ThreatIntelStore (and, for continuity, the on-disk
+    blocklist files) fresh from public threat feeds.
     """
+    name = "ThreatIntelligence"
 
-    def __init__(self, abuseipdb_key: str = ""):
-        super().__init__(daemon=True, name="SentinelThreatIntel")
-        self.abuseipdb_key = abuseipdb_key
-        self.running = False
+    def __init__(self, config: Optional[dict] = None, brain=None, abuseipdb_key: str = ""):
+        super().__init__(config, brain)
+        self.store = get_intel_store()
+        self.abuseipdb_key = abuseipdb_key or self.config.get("abuseipdb_key", "")
         self._last_update = _load_last_update()
 
-        # Resolve actual paths
+        # Resolve actual paths (fall back to configured defaults if not found on disk).
         self.hash_md5_path = find_items(HASH_FILE_PATH) or HASH_FILE_PATH
         self.hash_sha256_path = find_items(HASH256_FILE_PATH) or HASH256_FILE_PATH
         self.ip_blocklist_path = find_items(IPS_FILE_PATH) or IPS_FILE_PATH
 
-    def run(self):
-        self.running = True
+    def _run(self) -> None:
         _log("Threat Intelligence service started")
-        try:
-            brain, _, _, _ = _get_brain()
-            brain.set_module_running("ThreatIntelligence", True)
-        except Exception:
-            pass
 
-        # Initial update immediately
-        self._do_update_cycle()
+        # Seed the in-memory store from whatever is already persisted on disk
+        # so consumers (NetworkProtection) have IOCs immediately, even before
+        # the first live feed fetch completes.
+        persisted_ips = _load_ip_file(self.ip_blocklist_path)
+        if persisted_ips:
+            self.store.add_bad_ips(persisted_ips, source="persisted_blocklist")
 
-        while self.running:
-            # Sleep in small steps for responsiveness
-            elapsed = 0
-            interval = UPDATE_INTERVAL_HOURS * 3600
-            while elapsed < interval and self.running:
-                time.sleep(60)
-                elapsed += 60
+        self._heartbeat()
 
-            if self.running:
-                self._do_update_cycle()
+        # Run an update cycle immediately, then on the configured cadence.
+        self._update_cycle()
 
-    def stop(self):
-        self.running = False
-        try:
-            brain, _, _, _ = _get_brain()
-            brain.set_module_running("ThreatIntelligence", False)
-        except Exception:
-            pass
+        check_interval = self.config.get("check_interval", 60)
+        while not self._stopping():
+            if not self._sleep(check_interval):
+                break
+            self._update_cycle()
+            self._heartbeat()
 
-    def _do_update_cycle(self):
+    def _update_cycle(self) -> None:
         _log(f"Starting threat intel update cycle — {datetime.now().isoformat()}")
         total_new_ips = 0
         total_new_sha256 = 0
         total_new_md5 = 0
 
-        # --- Feodo botnet IPs ---
-        if _needs_update("feodo_ip", FEEDS["feodo_ip"]["update_hours"], self._last_update):
-            new_ips = self._fetch_ip_feed("feodo_ip", FEEDS["feodo_ip"]["url"])
-            if new_ips:
-                added = _append_unique_lines(
-                    self.ip_blocklist_path, new_ips,
-                    "Feodo Tracker botnet C2 IPs"
-                )
-                total_new_ips += added
-                _log(f"Feodo: +{added} new IPs")
-                self._last_update["feodo_ip"] = datetime.now().isoformat()
+        for feed_name, feed in FEEDS.items():
+            if self._stopping():
+                break
+            update_hours = feed.get("update_hours", UPDATE_INTERVAL_HOURS)
+            if not _needs_update(feed_name, update_hours, self._last_update):
+                continue
 
-        # --- CINS Score bad IPs ---
-        if _needs_update("cins_score", FEEDS["cins_score"]["update_hours"], self._last_update):
-            new_ips = self._fetch_ip_feed("cins_score", FEEDS["cins_score"]["url"])
-            if new_ips:
-                added = _append_unique_lines(
-                    self.ip_blocklist_path, new_ips,
-                    "CINS Score bad actors"
-                )
-                total_new_ips += added
-                _log(f"CINS: +{added} new IPs")
-                self._last_update["cins_score"] = datetime.now().isoformat()
+            feed_type = feed["type"]
+            try:
+                if feed_type == "ip_list":
+                    new_ips = self._fetch_ip_feed(feed_name, feed["url"])
+                    if new_ips:
+                        self.store.add_bad_ips(new_ips, source=feed_name)
+                        added = _append_unique_lines(
+                            self.ip_blocklist_path, new_ips, feed["description"]
+                        )
+                        total_new_ips += added
+                        _log(f"{feed_name}: +{added} new IPs")
 
-        # --- Emerging Threats IPs ---
-        if _needs_update("emerging_threats_ips", FEEDS["emerging_threats_ips"]["update_hours"], self._last_update):
-            new_ips = self._fetch_ip_feed("emerging_threats_ips", FEEDS["emerging_threats_ips"]["url"])
-            if new_ips:
-                added = _append_unique_lines(
-                    self.ip_blocklist_path, new_ips,
-                    "Emerging Threats compromised IPs"
-                )
-                total_new_ips += added
-                _log(f"Emerging Threats: +{added} new IPs")
-                self._last_update["emerging_threats_ips"] = datetime.now().isoformat()
+                elif feed_type == "urlhaus_hash_json":
+                    sha256s, md5s = self._fetch_urlhaus_hashes()
+                    if sha256s or md5s:
+                        self.store.add_bad_hashes(sha256s | md5s, source=feed_name)
+                    if sha256s:
+                        total_new_sha256 += _append_unique_lines(
+                            self.hash_sha256_path, sha256s, feed["description"]
+                        )
+                    if md5s:
+                        total_new_md5 += _append_unique_lines(
+                            self.hash_md5_path, md5s, feed["description"]
+                        )
 
-        # --- URLhaus hashes ---
-        if _needs_update("urlhaus_hashes", FEEDS["urlhaus_hashes"]["update_hours"], self._last_update):
-            sha256s, md5s = self._fetch_urlhaus_hashes()
-            if sha256s:
-                added = _append_unique_lines(
-                    self.hash_sha256_path, sha256s,
-                    "URLhaus malware hashes"
-                )
-                total_new_sha256 += added
-            if md5s:
-                added = _append_unique_lines(
-                    self.hash_md5_path, md5s,
-                    "URLhaus MD5 hashes"
-                )
-                total_new_md5 += added
-            self._last_update["urlhaus_hashes"] = datetime.now().isoformat()
+                elif feed_type == "malwarebazaar_api":
+                    sha256s, md5s = self._fetch_malwarebazaar_recent()
+                    if sha256s or md5s:
+                        self.store.add_bad_hashes(sha256s | md5s, source=feed_name)
+                    if sha256s:
+                        total_new_sha256 += _append_unique_lines(
+                            self.hash_sha256_path, sha256s, feed["description"]
+                        )
+                    if md5s:
+                        total_new_md5 += _append_unique_lines(
+                            self.hash_md5_path, md5s, feed["description"]
+                        )
 
-        # --- MalwareBazaar recent ---
-        if _needs_update("malwarebazaar_recent", FEEDS["malwarebazaar_recent"]["update_hours"], self._last_update):
-            sha256s, md5s = _fetch_malwarebazaar_recent()
-            if sha256s:
-                added = _append_unique_lines(
-                    self.hash_sha256_path, sha256s,
-                    "MalwareBazaar recent"
-                )
-                total_new_sha256 += added
-            if md5s:
-                added = _append_unique_lines(
-                    self.hash_md5_path, md5s,
-                    "MalwareBazaar MD5"
-                )
-                total_new_md5 += added
-            self._last_update["malwarebazaar_recent"] = datetime.now().isoformat()
+                else:
+                    _log(f"{feed_name}: unknown feed type '{feed_type}', skipped")
+                    continue
+
+                self._last_update[feed_name] = datetime.now().isoformat()
+
+            except Exception as e:
+                # A dead/unreachable feed must never crash the service loop.
+                _log(f"{feed_name} update error: {e}")
+                continue
 
         _save_last_update(self._last_update)
+
         summary = (
             f"Intel update complete: +{total_new_ips} IPs, "
             f"+{total_new_sha256} SHA256, +{total_new_md5} MD5"
@@ -404,62 +376,73 @@ class SentinelThreatIntelligence(threading.Thread):
         _log(summary)
 
         if total_new_ips + total_new_sha256 + total_new_md5 > 0:
-            try:
-                brain, ThreatEvent, ThreatCategory, ThreatSeverity = _get_brain()
-                brain.emit_event(ThreatEvent(
-                    category=ThreatCategory.SYSTEM,
-                    severity=ThreatSeverity.INFO,
-                    title="Threat intelligence feeds updated",
-                    detail=summary,
-                    source_module="ThreatIntelligence",
-                    extra={
-                        "new_ips": total_new_ips,
-                        "new_sha256": total_new_sha256,
-                        "new_md5": total_new_md5,
-                    },
-                ))
-            except Exception:
-                pass
+            self.emit_threat(
+                ThreatCategory.SYSTEM,
+                ThreatSeverity.INFO,
+                "Threat feed updated",
+                summary,
+                extra={
+                    "new_ips": total_new_ips,
+                    "new_sha256": total_new_sha256,
+                    "new_md5": total_new_md5,
+                    "store_stats": self.store.stats(),
+                },
+            )
 
-        # Notify running NIDS to reload its blacklist
-        if total_new_ips > 0:
-            self._notify_nids_reload()
+    # --- guarded per-feed fetchers: any failure is caught, logged, and skipped ---
 
     def _fetch_ip_feed(self, feed_name: str, url: str) -> Set[str]:
         try:
             resp = requests.get(url, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
-            return _parse_ip_list(resp.text)
+            return parse_ip_list(resp.text)
         except Exception as e:
             _log(f"{feed_name} fetch error: {e}")
             return set()
 
-    def _fetch_urlhaus_hashes(self) -> tuple[Set[str], Set[str]]:
+    def _fetch_urlhaus_hashes(self) -> Tuple[Set[str], Set[str]]:
         try:
             resp = requests.get(
-                "https://urlhaus-api.abuse.ch/v1/downloads/",
+                FEEDS["urlhaus_hashes"]["url"],
                 timeout=REQUEST_TIMEOUT
             )
             resp.raise_for_status()
             return _parse_urlhaus_hash_json(resp.content)
         except Exception as e:
-            _log(f"URLhaus fetch error: {e}")
+            _log(f"urlhaus_hashes fetch error: {e}")
             return set(), set()
 
-    def _notify_nids_reload(self):
+    def _fetch_malwarebazaar_recent(self) -> Tuple[Set[str], Set[str]]:
         try:
-            from Services.Protection.SentinelNetProtectionNG2 import (
-                BLACKLIST, LOCKS
+            resp = requests.post(
+                FEEDS["malwarebazaar_recent"]["url"],
+                data={"query": "get_recent", "selector": "100"},
+                timeout=REQUEST_TIMEOUT,
             )
-            import re as _re
-            new_ips: Set[str] = set()
-            if os.path.exists(self.ip_blocklist_path):
-                with open(self.ip_blocklist_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    text = f.read()
-                new_ips = set(_IP_RE.findall(text))
-            with LOCKS['blacklist']:
-                BLACKLIST.clear()
-                BLACKLIST.update(new_ips)
-            _log(f"NIDS blacklist hot-reloaded: {len(new_ips)} IPs")
+            resp.raise_for_status()
+            data = resp.json()
+            sha256s: Set[str] = set()
+            md5s: Set[str] = set()
+            if data.get("query_status") == "ok":
+                for entry in data.get("data", []):
+                    h = entry.get("sha256_hash", "")
+                    if h:
+                        sha256s.add(h.lower())
+                    m = entry.get("md5_hash", "")
+                    if m:
+                        md5s.add(m.lower())
+            return sha256s, md5s
         except Exception as e:
-            _log(f"NIDS reload failed: {e}")
+            _log(f"malwarebazaar_recent fetch error: {e}")
+            return set(), set()
+
+
+if __name__ == "__main__":
+    import time as _time
+    svc = ThreatIntelligence()
+    svc.start()
+    try:
+        while True:
+            _time.sleep(1)
+    except KeyboardInterrupt:
+        svc.stop()
