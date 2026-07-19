@@ -38,6 +38,16 @@ _DEFAULTS = {
     "window": 1.0,
 }
 
+# Cap on how many netsh block rules PSDS will accumulate over its lifetime --
+# keeps a long-running service from growing the firewall rule set (and the
+# in-memory _blocked_ips set) without bound.
+MAX_BLOCKED = 1000
+
+# Match only unsolicited inbound SYNs -- excludes SYN-ACK replies to our own
+# outbound connections (tcp.Ack == 0), so a busy legit remote host's replies
+# are never mistaken for a SYN flood and dropped/blocked.
+SYN_FILTER = "inbound and tcp.Syn == 1 and tcp.Ack == 0"
+
 
 def _is_admin() -> bool:
     """Best-effort elevation check -- WinDivert needs an admin driver handle."""
@@ -54,12 +64,21 @@ def _is_admin() -> bool:
 # brief). No I/O, no WinDivert -- driven directly by (ip, ts) pairs.
 # ---------------------------------------------------------------------------
 class SynRateTracker:
-    def __init__(self, threshold=50, window=1.0):
+    def __init__(self, threshold=50, window=1.0, max_ips=5000):
         self.threshold = threshold
         self.window = window
+        self.max_ips = max_ips
         self._syns = defaultdict(deque)
 
     def record(self, ip, ts):
+        if ip not in self._syns and len(self._syns) >= self.max_ips:
+            # Bound memory on a long-running service: evict the
+            # least-recently-active tracked IP before adding a new one.
+            oldest_ip = min(
+                self._syns,
+                key=lambda k: self._syns[k][-1] if self._syns[k] else -1,
+            )
+            del self._syns[oldest_ip]
         self._syns[ip].append(ts)
 
     def exceeded(self, ip, now):
@@ -69,6 +88,9 @@ class SynRateTracker:
         cutoff = now - self.window
         while q and q[0] <= cutoff:
             q.popleft()
+        if not q:
+            del self._syns[ip]
+            return False
         return len(q) >= self.threshold
 
 
@@ -94,6 +116,12 @@ class PSDS(BaseService):
     def _firewall_block(self, ip: str) -> bool:
         if ip in self._blocked_ips:
             return True
+        if len(self._blocked_ips) >= MAX_BLOCKED:
+            self._log(
+                f"MAX_BLOCKED ({MAX_BLOCKED}) reached; skipping netsh block for {ip}",
+                "WARN",
+            )
+            return False
         try:
             ts = int(time.time())
             base_name = f"PSDS_BLOCK_{ip}_{ts}"
@@ -137,7 +165,7 @@ class PSDS(BaseService):
             return
 
         try:
-            divert = pydivert.WinDivert("tcp.Syn and inbound")
+            divert = pydivert.WinDivert(SYN_FILTER)
             divert.open()
             self._divert = divert
         except Exception as e:
@@ -153,13 +181,18 @@ class PSDS(BaseService):
             except Exception as e:
                 if self._stopping():
                     break
-                self._log(f"WinDivert recv error: {e}", "ERROR")
+                self._log(f"packet loop error: {e}", "ERROR")
+                self._sleep(0.5)
                 continue
 
             try:
                 self._handle_packet(packet)
             except Exception as e:
-                self._log(f"packet handling error: {e}", "ERROR")
+                if self._stopping():
+                    break
+                self._log(f"packet loop error: {e}", "ERROR")
+                self._sleep(0.5)
+                continue
 
             self._heartbeat()
 
@@ -167,6 +200,12 @@ class PSDS(BaseService):
         """One SYN packet: record it, block+drop if the source IP is flooding,
         otherwise reinject it unchanged."""
         ip = packet.src_addr
+
+        if ip in self._blocked_ips:
+            # Already blocked -- drop silently without re-running the
+            # record/exceeded path (and without reinjecting the packet).
+            return
+
         now = time.time()
         self.tracker.record(ip, now)
 

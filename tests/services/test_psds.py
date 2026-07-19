@@ -27,3 +27,16 @@ def test_psds_degrades_without_pydivert(fake_brain, monkeypatch):
     import time; time.sleep(0.1)
     assert p.is_running() is True          # inert but alive, not ERROR
     p.stop()
+
+def test_syn_filter_excludes_syn_ack():
+    import Services.Protection.Sentinelpsds as psds_mod
+    assert "Ack == 0" in psds_mod.SYN_FILTER   # must not count SYN-ACK replies
+
+def test_tracker_prunes_and_caps():
+    from Services.Protection.Sentinelpsds import SynRateTracker
+    t = SynRateTracker(threshold=3, window=5, max_ips=2)
+    for i in range(3):
+        t.record("1.1.1.1", i)
+    assert t.exceeded("1.1.1.1", now=100) is False   # window expired -> drained -> pruned
+    t.record("2.2.2.2", 0); t.record("3.3.3.3", 0)   # cap respected, no crash
+    assert len(t._syns) <= 2
