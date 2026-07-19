@@ -18,3 +18,4 @@ python-tlsh  # optional (TLSH fuzzy hashing); needs a C++ build on Windows — l
 # dev
 pytest
 watchdog  # real-time file-system events (RansomProtection)
+pydivert  # WinDivert SYN/scan defense (PSDS); optional, degrades gracefully

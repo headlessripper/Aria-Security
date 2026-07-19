@@ -33,18 +33,18 @@ except Exception:
     VirusScanner = None  # type: ignore
 
 try:
-    from Services.Protection.SentinelNetProtectionNG2 import SentinelAgentService as NetService
+    from Services.Protection.SentinelNetProtectionNG2 import NetworkProtection
 except KeyboardInterrupt:
     raise
 except Exception:
-    NetService = None  # type: ignore
+    NetworkProtection = None  # type: ignore
 
 try:
-    from Services.Protection.Sentinelpsds import start as psds_start, stop as psds_stop
+    from Services.Protection.Sentinelpsds import PSDS
 except KeyboardInterrupt:
     raise
 except Exception:
-    psds_start = psds_stop = None  # type: ignore
+    PSDS = None  # type: ignore
 
 try:
     from Services.Protection.SentinelRansomProtection import RansomProtection
@@ -68,11 +68,11 @@ except Exception:
     BehavioralEngine = None  # type: ignore
 
 try:
-    from Services.SentinelThreatIntelligence import SentinelThreatIntelligence
+    from Services.SentinelThreatIntelligence import ThreatIntelligence
 except KeyboardInterrupt:
     raise
 except Exception:
-    SentinelThreatIntelligence = None  # type: ignore
+    ThreatIntelligence = None  # type: ignore
 
 try:
     from Services.AVBrain import get_avbrain
@@ -468,55 +468,6 @@ class _ModuleThread:
         return bool(self._thread and self._thread.is_alive())
 
 
-class _PsdsThread(_ModuleThread):
-    def __init__(self):
-        super().__init__("PSDS")
-
-    def _run(self):
-        try:
-            psds_start()
-            get_brain().set_module_running("PSDS", True)
-        except Exception as e:
-            print(f"[PSDS] start error: {e}")
-            return
-        self._stop_event.wait()
-
-    def _do_stop(self):
-        try:
-            psds_stop()
-        except Exception:
-            pass
-        try:
-            get_brain().set_module_running("PSDS", False)
-        except Exception:
-            pass
-
-
-class _NetThread(_ModuleThread):
-    def __init__(self, net_service):
-        super().__init__("NetProtection")
-        self._svc = net_service
-
-    def _run(self):
-        try:
-            self._svc.start_monitoring()
-            get_brain().set_module_running("NetProtection", True)
-        except Exception as e:
-            print(f"[NetProtection] start error: {e}")
-            return
-        self._stop_event.wait()
-
-    def _do_stop(self):
-        try:
-            self._svc.stop_monitoring()
-        except Exception:
-            pass
-        try:
-            get_brain().set_module_running("NetProtection", False)
-        except Exception:
-            pass
-
-
 class _ServiceHolder:
     """Thin uniform adapter around a new-style BaseService (RansomProtection /
     ExploitProtection / BehavioralEngine).
@@ -556,34 +507,6 @@ class _ServiceHolder:
             return bool(self._svc.is_running())
         except Exception:
             return False
-
-
-class _IntelThread(_ModuleThread):
-    def __init__(self):
-        super().__init__("ThreatIntelligence")
-        self._intel = None
-
-    def _run(self):
-        try:
-            self._intel = SentinelThreatIntelligence()
-            self._intel.start()
-            get_brain().set_module_running("ThreatIntelligence", True)
-        except Exception as e:
-            print(f"[ThreatIntelligence] start error: {e}")
-            return
-        self._stop_event.wait()
-
-    def _do_stop(self):
-        if self._intel:
-            try:
-                self._intel.stop()
-            except Exception:
-                pass
-            self._intel = None
-        try:
-            get_brain().set_module_running("ThreatIntelligence", False)
-        except Exception:
-            pass
 
 
 class _UsbThread(_ModuleThread):
@@ -790,10 +713,15 @@ class SentinelService:
 
         _scanner      = VirusScanner(max_workers=4) if VirusScanner else None
         _executor     = _get_executor() if _get_executor else None
-        _net_svc      = NetService(interval=1.5) if NetService else None
         # New-style BaseService protection services. Each manages its own worker
         # thread and reports its own module status to the brain, so they're used
         # directly (behind a thin _ServiceHolder), NOT wrapped in a _ModuleThread.
+        # ThreatIntelligence is constructed (and started) BEFORE NetworkProtection
+        # so the shared intel store is live when NetworkProtection consumes it via
+        # get_intel_store().
+        _intel_svc    = ThreatIntelligence() if ThreatIntelligence else None
+        _net_svc      = NetworkProtection() if NetworkProtection else None
+        _psds_svc     = PSDS() if PSDS else None
         _ransom_svc   = RansomProtection(config={"watch_dirs": list(_RANSOM_WATCH_DIRS)}) if RansomProtection else None
         _exploit_svc  = ExploitProtection() if ExploitProtection else None
         _behav_svc    = BehavioralEngine() if BehavioralEngine else None
@@ -813,19 +741,20 @@ class SentinelService:
         ]:
             self._brain.register_module(name)
 
-        self._psds_thread    = _PsdsThread()
-        self._net_thread     = _NetThread(_net_svc)
+        self._intel_thread   = _ServiceHolder(_intel_svc)
+        self._net_thread     = _ServiceHolder(_net_svc)
+        self._psds_thread    = _ServiceHolder(_psds_svc)
         self._ransom_thread  = _ServiceHolder(_ransom_svc)
         self._exploit_thread = _ServiceHolder(_exploit_svc)
         self._behav_thread   = _ServiceHolder(_behav_svc)
-        self._intel_thread   = _IntelThread()
         self._usb_thread     = _UsbThread(_usb_mon)
         self._sense_thread   = _SenseThread()
 
+        # ThreatIntelligence starts first so the shared intel store is populated
+        # before NetworkProtection begins consuming it.
         self._module_threads = [
-            self._psds_thread, self._net_thread,
-            self._ransom_thread, self._exploit_thread,
-            self._behav_thread, self._intel_thread,
+            self._intel_thread, self._net_thread, self._psds_thread,
+            self._ransom_thread, self._exploit_thread, self._behav_thread,
             self._usb_thread, self._sense_thread,
         ]
 
