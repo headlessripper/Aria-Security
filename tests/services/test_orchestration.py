@@ -24,3 +24,13 @@ def test_network_services_start_stop(fake_brain):
     assert all(s.is_running() for s in svcs)
     for s in svcs: s.stop()
     assert not any(s.is_running() for s in svcs)
+
+
+def test_device_services_start_stop(fake_brain):
+    from Services.SentinelUSBGuard import StorageGuard
+    from Services.Sense.SentinelSense import SentinelSense
+    svcs = [StorageGuard(brain=fake_brain), SentinelSense(brain=fake_brain)]
+    for s in svcs: s.start()
+    assert all(s.is_running() for s in svcs)
+    for s in svcs: s.stop()
+    assert not any(s.is_running() for s in svcs)

@@ -75,6 +75,20 @@ except Exception:
     ThreatIntelligence = None  # type: ignore
 
 try:
+    from Services.SentinelUSBGuard import StorageGuard
+except KeyboardInterrupt:
+    raise
+except Exception:
+    StorageGuard = None  # type: ignore
+
+try:
+    from Services.Sense.SentinelSense import SentinelSense
+except KeyboardInterrupt:
+    raise
+except Exception:
+    SentinelSense = None  # type: ignore
+
+try:
     from Services.AVBrain import get_avbrain
 except KeyboardInterrupt:
     raise
@@ -151,212 +165,6 @@ class _Settings:
 
     def sync(self) -> None:
         pass  # writes happen on every setValue
-
-
-# ---------------------------------------------------------------------------
-# USB Drive Monitor
-# ---------------------------------------------------------------------------
-
-class USBDriveMonitor:
-    """
-    Monitors for newly inserted USB drives and auto-scans them.
-    Replaces QObject — uses _Signal callbacks from SentinelBrain.
-    """
-    _USB_SCAN_EXTS = {
-        '.exe', '.dll', '.sys', '.scr', '.ocx',
-        '.bat', '.cmd', '.ps1', '.vbs', '.js', '.jar',
-        '.msi', '.com', '.pif', '.lnk', '.hta',
-    }
-    _MAX_FILES = 5000
-
-    def __init__(self, scanner, executor):
-        self.scanner = scanner
-        self.executor = executor
-        self._thread: Optional[threading.Thread] = None
-        self._running = False
-        self._known_drives: set = set()
-        # Callbacks: connect(fn) / emit(*args)
-        from Services.SentinelBrain import _Signal
-        self.usb_scanning      = _Signal()   # (drive, name)
-        self.usb_scan_complete = _Signal()   # (drive, name, threat_count)
-        self.usb_inserted      = _Signal()   # (drive, name)
-        self.usb_threat_found  = _Signal()   # (drive, threat_count)
-
-    def start(self):
-        if self._running:
-            return
-        self._running = True
-        self._known_drives = self._get_removable_drives()
-        self._thread = threading.Thread(target=self._monitor_loop, daemon=True, name="USBMonitor")
-        self._thread.start()
-
-    def stop(self):
-        self._running = False
-
-    @staticmethod
-    def _get_removable_drives() -> set:
-        import ctypes as _ct
-        drives = set()
-        bitmask = _ct.windll.kernel32.GetLogicalDrives()
-        for i in range(26):
-            if bitmask & (1 << i):
-                letter = chr(ord('A') + i) + ":"
-                if _ct.windll.kernel32.GetDriveTypeW(letter + "\\") == 2:
-                    drives.add(letter)
-        return drives
-
-    def _monitor_loop(self):
-        try:
-            import wmi as _wmi
-            c = _wmi.WMI()
-            watcher = c.Win32_VolumeChangeEvent.watch_for(EventType=2)
-            from Interface.write_to_log import write_to_log
-            write_to_log("[USB] WMI drive arrival watcher active", "logs/SystemSentinel.log")
-            while self._running:
-                try:
-                    watcher(timeout_ms=2000)
-                    current = self._get_removable_drives()
-                    new = current - self._known_drives
-                    self._known_drives = current
-                    for drive in new:
-                        name = self._get_volume_name(drive)
-                        self.usb_scanning.emit(drive, name)
-                        threading.Thread(target=self._scan_usb, args=(drive, name), daemon=True).start()
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"USB WMI unavailable ({e}), switching to polling")
-            self._poll_loop()
-
-    def _poll_loop(self):
-        while self._running:
-            try:
-                current = self._get_removable_drives()
-                new = current - self._known_drives
-                self._known_drives = current
-                for drive in new:
-                    name = self._get_volume_name(drive)
-                    self.usb_scanning.emit(drive, name)
-                    threading.Thread(target=self._scan_usb, args=(drive, name), daemon=True).start()
-            except Exception:
-                pass
-            time.sleep(3)
-
-    @staticmethod
-    def _get_volume_name(drive_letter: str) -> str:
-        try:
-            import ctypes as _ct
-            buf = _ct.create_unicode_buffer(256)
-            _ct.windll.kernel32.GetVolumeInformationW(drive_letter + "\\", buf, 256, None, None, None, None, 0)
-            return buf.value or "USB Drive"
-        except Exception:
-            return "USB Drive"
-
-    @staticmethod
-    def _get_usb_instance_id(drive_letter: str) -> str:
-        try:
-            ps = (
-                "$dl = '" + drive_letter + "'; "
-                "$disk = Get-WmiObject -Query \"SELECT * FROM Win32_DiskDrive WHERE InterfaceType='USB'\" | "
-                "ForEach-Object { "
-                "  $d = $_; "
-                "  $parts = Get-WmiObject -Query \"ASSOCIATORS OF {Win32_DiskDrive.DeviceID='$($d.DeviceID)'} "
-                "    WHERE AssocClass=Win32_DiskDriveToDiskPartition\"; "
-                "  foreach ($p in $parts) { "
-                "    $lds = Get-WmiObject -Query \"ASSOCIATORS OF {Win32_DiskPartition.DeviceID='$($p.DeviceID)'} "
-                "      WHERE AssocClass=Win32_LogicalDiskToPartition\"; "
-                "    foreach ($ld in $lds) { if ($ld.DeviceID -eq $dl) { $d.PNPDeviceID } } "
-                "  } "
-                "}; $disk | Select-Object -First 1"
-            )
-            import subprocess as _sp
-            r = _sp.run(["powershell", "-NonInteractive", "-NoProfile", "-Command", ps],
-                        capture_output=True, text=True, timeout=12)
-            return r.stdout.strip()
-        except Exception:
-            return ""
-
-    def _scan_usb(self, drive_letter: str, device_name: str = "USB Drive"):
-        from Interface.write_to_log import write_to_log
-        drive_path = drive_letter + "\\"
-        if not os.path.isdir(drive_path):
-            self.usb_scan_complete.emit(drive_letter, device_name, 0)
-            return
-
-        instance_id = ""
-        try:
-            instance_id = self._get_usb_instance_id(drive_letter)
-        except Exception:
-            pass
-
-        # ── Block-until-scanned guard: lock the drive, scan, hold for user trust ──
-        # When the USB Guard is active it OWNS the response (lock → scan →
-        # quarantine → await trust). Fall back to the legacy inline scan only if
-        # the guard isn't wired up.
-        try:
-            from Services.SentinelUSBGuard import get_guard
-            guard = get_guard()
-            if guard is not None:
-                self.usb_scanning.emit(drive_letter, device_name)
-                guard.handle_insertion(drive_letter, device_name, instance_id)
-                self.usb_scan_complete.emit(drive_letter, device_name, 0)
-                return
-        except Exception as e:
-            write_to_log(f"[USB] guard unavailable, using inline scan: {e}",
-                         "logs/SystemSentinel.log")
-
-        try:
-            from Interface.Pages.UsbAllowlistPage import is_usb_allowed
-            if instance_id and is_usb_allowed(instance_id):
-                write_to_log(f"[USB] {drive_letter} is in allowlist — scan skipped", "logs/SystemSentinel.log")
-                self.usb_inserted.emit(drive_letter, device_name)
-                self.usb_scan_complete.emit(drive_letter, device_name, 0)
-                return
-        except Exception:
-            pass
-
-        write_to_log(f"[USB] Auto-scanning {drive_path}", "logs/SystemSentinel.log")
-        files = []
-        try:
-            for root, _, fnames in os.walk(drive_path):
-                for fname in fnames:
-                    if Path(fname).suffix.lower() in self._USB_SCAN_EXTS:
-                        files.append(os.path.join(root, fname))
-                    if len(files) >= self._MAX_FILES:
-                        break
-                if len(files) >= self._MAX_FILES:
-                    break
-        except PermissionError:
-            pass
-
-        detections = []
-        for fpath in files:
-            try:
-                result = self.scanner.scan_file(fpath)
-                verdict = result.get("verdict", "CLEAN")
-                if verdict in ("MALWARE", "SUSPICIOUS"):
-                    detections.append(fpath)
-                    reasons = result.get("reasons", [])
-                    write_to_log(f"[USB] THREAT: {fpath} — {verdict}", "logs/SystemSentinel.log")
-                    try:
-                        brain = get_brain()
-                        sev = ThreatSeverity.CRITICAL if verdict == "MALWARE" else ThreatSeverity.HIGH
-                        brain.emit_event(ThreatEvent(
-                            category=ThreatCategory.USB, severity=sev,
-                            title=f"USB threat on {drive_letter}: {os.path.basename(fpath)}",
-                            detail=f"{verdict} — {', '.join(reasons[:3])}",
-                            source_module="USBMonitor", file_path=fpath,
-                        ))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        threat_count = len(detections)
-        self.usb_threat_found.emit(drive_letter, threat_count)
-        if threat_count == 0:
-            self.usb_inserted.emit(drive_letter, device_name)
-        self.usb_scan_complete.emit(drive_letter, device_name, threat_count)
 
 
 # ---------------------------------------------------------------------------
@@ -507,64 +315,6 @@ class _ServiceHolder:
             return bool(self._svc.is_running())
         except Exception:
             return False
-
-
-class _UsbThread(_ModuleThread):
-    def __init__(self, usb_monitor: USBDriveMonitor):
-        super().__init__("USBMonitor")
-        self._monitor = usb_monitor
-
-    def _run(self):
-        try:
-            self._monitor.start()
-            get_brain().set_module_running("USBMonitor", True)
-        except Exception as e:
-            print(f"[USBMonitor] start error: {e}")
-            return
-        self._stop_event.wait()
-
-    def _do_stop(self):
-        try:
-            self._monitor.stop()
-        except Exception:
-            pass
-        try:
-            get_brain().set_module_running("USBMonitor", False)
-        except Exception:
-            pass
-
-
-class _SenseThread(_ModuleThread):
-    """
-    Runs the Sentinel Sense core monitor (install/uninstall tracking + leftover
-    detection) inside the main engine — no separate process, no Qt GUI. The
-    headless core loop is started via SentinelSenseController.
-    """
-    def __init__(self):
-        super().__init__("SentinelSense")
-        self._controller = None
-
-    def _run(self):
-        try:
-            from Services.Sense.SentinelSense import SentinelSenseController
-            self._controller = SentinelSenseController()
-            self._controller.start()
-            get_brain().set_module_running("SentinelSense", True)
-        except Exception as e:
-            print(f"[SentinelSense] start error: {e}")
-            return
-        self._stop_event.wait()
-
-    def _do_stop(self):
-        try:
-            if self._controller:
-                self._controller.stop()
-        except Exception:
-            pass
-        try:
-            get_brain().set_module_running("SentinelSense", False)
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -725,14 +475,13 @@ class SentinelService:
         _ransom_svc   = RansomProtection(config={"watch_dirs": list(_RANSOM_WATCH_DIRS)}) if RansomProtection else None
         _exploit_svc  = ExploitProtection() if ExploitProtection else None
         _behav_svc    = BehavioralEngine() if BehavioralEngine else None
-        _usb_mon      = USBDriveMonitor(_scanner, _executor)
-
-        # Wire the block-until-scanned USB Guard with the live scanner + executor.
-        try:
-            from Services.SentinelUSBGuard import init_guard
-            init_guard(_scanner, _executor)
-        except Exception as e:
-            print(f"[USBGuard] init failed: {e}")
+        # Device cluster: self-polling BaseService devices. StorageGuard's
+        # __init__ registers itself as the get_guard() singleton the Flask UI
+        # reads; reuse the live scanner so it shares the loaded models.
+        _storage_svc  = StorageGuard() if StorageGuard else None
+        if _storage_svc is not None and _scanner is not None:
+            _storage_svc._scanner = _scanner
+        _sense_svc    = SentinelSense() if SentinelSense else None
 
         for name in [
             "FileScanner", "NetProtection", "RansomProtection",
@@ -747,8 +496,8 @@ class SentinelService:
         self._ransom_thread  = _ServiceHolder(_ransom_svc)
         self._exploit_thread = _ServiceHolder(_exploit_svc)
         self._behav_thread   = _ServiceHolder(_behav_svc)
-        self._usb_thread     = _UsbThread(_usb_mon)
-        self._sense_thread   = _SenseThread()
+        self._usb_thread     = _ServiceHolder(_storage_svc)
+        self._sense_thread   = _ServiceHolder(_sense_svc)
 
         # ThreatIntelligence starts first so the shared intel store is populated
         # before NetworkProtection begins consuming it.
@@ -759,10 +508,6 @@ class SentinelService:
         ]
 
         self.worker = SentinelWorker(_scanner, _net_svc, _executor)
-
-        # Forward USB signals from monitor → worker for backward-compat
-        _usb_mon.usb_scanning.connect(lambda d, n: self.worker.usb_scanning.emit(d, n))
-        _usb_mon.usb_scan_complete.connect(lambda d, n, c: self.worker.usb_scan_complete.emit(d, n, c))
 
         # Worker callbacks
         self.worker.status_changed.connect(self._on_status_changed)
