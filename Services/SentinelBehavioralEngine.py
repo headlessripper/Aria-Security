@@ -1,506 +1,280 @@
 # SentinelBehavioralEngine.py
-# JSON-configurable behavioral rules engine.
-# Defines multi-step threat patterns as composable conditions → action.
+# JSON-configurable behavioral rules engine, rewritten as a BaseService.
 #
-# Rule schema (behavioral_rules.json):
+# A "live event stream" (currently: psutil-polled process starts and network
+# connections) is fed through a set of declarative JSON rules. Each rule
+# matches on an event type + a list of field conditions, and can require a
+# threshold of matching events within a time window before it fires (e.g.
+# "5 connects to a 185.x IP within 30s"). Single-event rules (threshold <= 1)
+# fire immediately on the first match.
+#
+# Rule schema (Engine/Rules/behavioral_rules.json):
 # {
 #   "rules": [
 #     {
-#       "name": "LOLBin URL Download",
-#       "enabled": true,
-#       "severity": "high",
-#       "description": "certutil.exe used to download files (common malware technique)",
+#       "id": "encoded_powershell",
+#       "name": "Encoded PowerShell Execution",
+#       "event": "process_start",
+#       "severity": "HIGH",
 #       "conditions": [
-#         {"type": "process_name", "value": "certutil.exe"},
-#         {"type": "cmdline_contains", "value": "-urlcache"}
+#         {"field": "image", "op": "contains", "value": "powershell"},
+#         {"field": "cmdline", "op": "regex", "value": "-[eE]nc"}
 #       ],
-#       "condition_mode": "all",   // "all" = AND,  "any" = OR
-#       "action": "alert_and_kill"
+#       "threshold": 1,
+#       "window_seconds": null
 #     }
 #   ]
 # }
 #
-# Supported condition types:
-#   process_name        — exact match (case-insensitive)
-#   process_name_in     — value is a list
-#   cmdline_contains    — substring in command line
-#   parent_name         — parent process name
-#   file_path_contains  — exe path contains substring
-#   user_writable_path  — exe is in a user-writable directory
-#   high_thread_count   — num_threads > value
-#   high_memory_mb      — RSS memory MB > value
-#   network_connection  — process has established network connections
-#   child_of_browser    — parent is a browser process
+# `event` matches against event["type"]. `conditions` are ANDed; each
+# condition reads event[field] and compares it against `value` via `op`.
 #
-# Supported actions:
-#   alert           — log + toast notification
-#   alert_and_kill  — log + toast + kill process
-#   quarantine      — kill + quarantine the executable
+# `load_rules`, `event_matches`, and `RuleState` are PURE (no psutil calls)
+# so they can be driven directly by tests. `BehavioralEngine._run` is the
+# psutil-polling BaseService loop that turns live system activity into
+# events and feeds them through the rules.
 
-import os
-import sys
+from __future__ import annotations
+
 import json
+import re
 import time
-import threading
-import traceback
-from pathlib import Path
-from typing import Dict, List, Optional, Any
-from collections import defaultdict
+from collections import deque
+from typing import Optional
 
-import psutil
-import wmi
-from winotify import Notification, audio
+from Services.framework.base_service import BaseService
+from Services.SentinelBrain import ThreatCategory, ThreatSeverity
 
-from Interface.write_to_log import write_to_log
-from Config.Sys_Config import SYSTEM_ICON_PATH
-from Interface.find_items import find_items
+try:
+    import psutil
+except Exception:  # keep importable in isolation / test environments without psutil
+    psutil = None
 
-def _get_brain():
-    from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
-    return get_brain(), ThreatEvent, ThreatCategory, ThreatSeverity
 
-BEHAV_LOG = "logs/Behavioral.log"
 DEFAULT_RULES_PATH = "Engine/Rules/behavioral_rules.json"
 
-BROWSER_PROCESS_NAMES = {
-    'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',
-    'brave.exe', 'opera.exe', 'vivaldi.exe', 'safari.exe',
+
+# ---------------------------------------------------------------------------
+# Pure rule evaluation
+# ---------------------------------------------------------------------------
+
+_OPS = {
+    "eq": lambda a, b: a == b,
+    "contains": lambda a, b: b in (a or ""),
+    "startswith": lambda a, b: (a or "").startswith(b),
+    "regex": lambda a, b: re.search(b, a or "") is not None,
+    "in": lambda a, b: a in b,
 }
 
-SYSTEM_PATHS = [
-    r'c:\windows\\',
-    r'c:\windows\system32',
-    r'c:\windows\syswow64',
-    r'c:\windows\winsxs',
-    r'c:\program files\\',
-    r'c:\program files (x86)\\',
-    r'c:\programdata\\',
-]
 
-
-def _log(msg: str):
-    write_to_log(msg, BEHAV_LOG)
-
-
-def _toast(title: str, msg: str):
-    icon = find_items(SYSTEM_ICON_PATH)
-    try:
-        toast = Notification(app_id="Aria Security", title=title, msg=msg,
-                             icon=icon, duration="long")
-        toast.set_audio(audio.Reminder, loop=False)
-        toast.show()
-    except Exception:
-        pass
-
-
-def _is_user_writable(path: str) -> bool:
-    if not path:
+def event_matches(rule: dict, event: dict) -> bool:
+    """True if `event` satisfies `rule`'s event type + all conditions (AND)."""
+    if rule.get("event") != event.get("type"):
         return False
-    low = path.lower()
-    return not any(low.startswith(sp) for sp in SYSTEM_PATHS)
+    for cond in rule.get("conditions", []):
+        op = _OPS.get(cond.get("op"))
+        if op is None:
+            return False
+        if not op(event.get(cond.get("field")), cond.get("value")):
+            return False
+    return True
 
 
-def _get_parent_name(pid: int) -> str:
+def load_rules(path: str) -> list:
+    """Load rules from a JSON file, skipping malformed entries.
+
+    A rule is kept only if it is a dict with a truthy 'event' and a
+    'conditions' key present (even if empty).
+    """
     try:
-        return psutil.Process(pid).name()
+        raw = json.loads(open(path, encoding="utf-8").read())
     except Exception:
-        return ""
+        return []
+    out = []
+    for r in raw.get("rules", []):
+        if isinstance(r, dict) and r.get("event") and "conditions" in r:
+            out.append(r)
+    return out
+
+
+class RuleState:
+    """Tracks per-rule burst state for windowed thresholds.
+
+    - threshold <= 1 (or no window): fires on every matching event.
+    - threshold > 1 with a window: fires once when `threshold` matching
+      events land within `window_seconds` of each other (a "burst"), then
+      stays quiet until the window count drops back below threshold and a
+      new burst accumulates.
+    """
+
+    def __init__(self, rule: dict):
+        self._hits: deque = deque()
+        self._fired = False
+
+    def feed(self, rule: dict, event: dict, now: float) -> bool:
+        if not event_matches(rule, event):
+            return False
+        threshold = int(rule.get("threshold", 1))
+        window = rule.get("window_seconds")
+        if window is None or threshold <= 1:
+            return True
+        cutoff = now - float(window)
+        self._hits.append(now)
+        while self._hits and self._hits[0] <= cutoff:
+            self._hits.popleft()
+        if len(self._hits) >= threshold and not self._fired:
+            self._fired = True
+            return True
+        if len(self._hits) < threshold:
+            self._fired = False
+        return False
 
 
 # ---------------------------------------------------------------------------
-# Default rules shipped with the product
+# BaseService: polls live system activity, feeds events through rules
 # ---------------------------------------------------------------------------
 
-DEFAULT_RULES = {
-    "rules": [
-        {
-            "name": "LOLBin URL Download via certutil",
-            "enabled": True,
-            "severity": "high",
-            "description": "certutil.exe used to download files — classic malware dropper technique",
-            "conditions": [
-                {"type": "process_name", "value": "certutil.exe"},
-                {"type": "cmdline_contains", "value": "-urlcache"}
-            ],
-            "condition_mode": "all",
-            "action": "alert_and_kill"
-        },
-        {
-            "name": "PowerShell Encoded Command",
-            "enabled": True,
-            "severity": "high",
-            "description": "PowerShell running encoded (obfuscated) commands",
-            "conditions": [
-                {"type": "process_name", "value": "powershell.exe"},
-                {"type": "cmdline_contains", "value": "-EncodedCommand"}
-            ],
-            "condition_mode": "all",
-            "action": "alert"
-        },
-        {
-            "name": "PowerShell Download Cradle",
-            "enabled": True,
-            "severity": "high",
-            "description": "PowerShell downloading and executing remote content (IEX / Invoke-Expression)",
-            "conditions": [
-                {"type": "process_name", "value": "powershell.exe"},
-                {"type": "cmdline_contains", "value": "IEX"}
-            ],
-            "condition_mode": "all",
-            "action": "alert"
-        },
-        {
-            "name": "Mshta Scriptlet Execution",
-            "enabled": True,
-            "severity": "high",
-            "description": "mshta.exe executing a remote script — common for JS/VBS malware",
-            "conditions": [
-                {"type": "process_name", "value": "mshta.exe"},
-                {"type": "cmdline_contains", "value": "http"}
-            ],
-            "condition_mode": "all",
-            "action": "alert_and_kill"
-        },
-        {
-            "name": "Regsvr32 Remote COM Execution (Squiblydoo)",
-            "enabled": True,
-            "severity": "critical",
-            "description": "regsvr32.exe loading a remote COM scriptlet — Squiblydoo bypass",
-            "conditions": [
-                {"type": "process_name", "value": "regsvr32.exe"},
-                {"type": "cmdline_contains", "value": "/s"},
-                {"type": "cmdline_contains", "value": "http"}
-            ],
-            "condition_mode": "all",
-            "action": "alert_and_kill"
-        },
-        {
-            "name": "Browser Spawning Script Interpreter",
-            "enabled": True,
-            "severity": "high",
-            "description": "Browser launched cmd/powershell/wscript — malicious iframe or drive-by",
-            "conditions": [
-                {"type": "child_of_browser", "value": True},
-                {"type": "process_name_in", "value": ["cmd.exe", "powershell.exe", "wscript.exe", "cscript.exe"]}
-            ],
-            "condition_mode": "all",
-            "action": "alert_and_kill"
-        },
-        {
-            "name": "WMI Spawning Shell",
-            "enabled": True,
-            "severity": "high",
-            "description": "WMI provider host spawning a shell — WMI-based lateral movement",
-            "conditions": [
-                {"type": "parent_name", "value": "WmiPrvSE.exe"},
-                {"type": "process_name_in", "value": ["cmd.exe", "powershell.exe", "wscript.exe"]}
-            ],
-            "condition_mode": "all",
-            "action": "alert_and_kill"
-        },
-        {
-            "name": "RunDLL32 Remote Payload",
-            "enabled": True,
-            "severity": "high",
-            "description": "rundll32.exe loading a remote or temp-directory DLL",
-            "conditions": [
-                {"type": "process_name", "value": "rundll32.exe"},
-                {"type": "cmdline_contains", "value": "\\temp\\"}
-            ],
-            "condition_mode": "all",
-            "action": "alert"
-        },
-        {
-            "name": "Suspicious Process from Temp Directory",
-            "enabled": True,
-            "severity": "medium",
-            "description": "Executable launched directly from %TEMP% — typical malware dropper",
-            "conditions": [
-                {"type": "file_path_contains", "value": "\\temp\\"},
-                {"type": "user_writable_path", "value": True}
-            ],
-            "condition_mode": "all",
-            "action": "alert"
-        },
-        {
-            "name": "Process with Extremely High Thread Count",
-            "enabled": True,
-            "severity": "medium",
-            "description": "Possible process hollowing or thread injection",
-            "conditions": [
-                {"type": "high_thread_count", "value": 200},
-                {"type": "user_writable_path", "value": True}
-            ],
-            "condition_mode": "all",
-            "action": "alert"
-        },
-        {
-            "name": "LSASS Memory Access Attempt",
-            "enabled": True,
-            "severity": "critical",
-            "description": "Non-system process attempting to open LSASS — credential dumping",
-            "conditions": [
-                {"type": "process_name_in", "value": ["procdump.exe", "mimikatz.exe", "wce.exe",
-                                                        "fgdump.exe", "pwdump.exe", "gsecdump.exe"]}
-            ],
-            "condition_mode": "any",
-            "action": "alert_and_kill"
-        },
-    ]
-}
+class BehavioralEngine(BaseService):
+    name = "BehavioralEngine"
 
+    def __init__(self, config=None, brain=None):
+        cfg = dict(config or {})
+        cfg.setdefault("rules_path", DEFAULT_RULES_PATH)
+        cfg.setdefault("poll_interval", 2.0)
+        super().__init__(cfg, brain)
+        self.rules = load_rules(self.config["rules_path"])
+        self._states = {id(rule): RuleState(rule) for rule in self.rules}
+        self._known_pids: set = set()
+        self._seeded = False
 
-# ---------------------------------------------------------------------------
-# Rule evaluator
-# ---------------------------------------------------------------------------
+    def reload_rules(self) -> None:
+        self.rules = load_rules(self.config["rules_path"])
+        self._states = {id(rule): RuleState(rule) for rule in self.rules}
 
-class RuleEvaluator:
+    # --- event feeding (pure-ish glue; drives the rule engine) ---
+    def _feed_event(self, event: dict, now: float) -> None:
+        for rule in self.rules:
+            state = self._states[id(rule)]
+            try:
+                fired = state.feed(rule, event, now)
+            except Exception:
+                continue
+            if fired:
+                self._on_fire(rule, event)
+
+    def _on_fire(self, rule: dict, event: dict) -> None:
+        severity_name = rule.get("severity", "MEDIUM")
+        try:
+            severity = ThreatSeverity[severity_name]
+        except KeyError:
+            severity = ThreatSeverity.MEDIUM
+        title = rule.get("name", rule.get("id", "Behavioral rule"))
+        detail = self._summarize_event(event)
+        self.emit_threat(
+            ThreatCategory.BEHAVIORAL,
+            severity,
+            title,
+            detail=detail,
+            pid=event.get("pid"),
+            ip_address=event.get("remote_ip"),
+            extra=event,
+        )
 
     @staticmethod
-    def evaluate_condition(cond: Dict, proc: psutil.Process, wmi_proc=None) -> bool:
-        ctype = cond.get("type", "")
-        value = cond.get("value")
+    def _summarize_event(event: dict) -> str:
+        etype = event.get("type", "event")
+        if etype == "process_start":
+            return f"process_start: image={event.get('image')} cmdline={event.get('cmdline')} parent={event.get('parent')}"
+        if etype == "net_connect":
+            return f"net_connect: remote_ip={event.get('remote_ip')} pid={event.get('pid')}"
+        return f"{etype}: {event}"
 
-        try:
-            if ctype == "process_name":
-                return proc.name().lower() == str(value).lower()
-
-            elif ctype == "process_name_in":
-                names = [v.lower() for v in (value or [])]
-                return proc.name().lower() in names
-
-            elif ctype == "cmdline_contains":
-                cmdline = " ".join(proc.cmdline()).lower()
-                return str(value).lower() in cmdline
-
-            elif ctype == "parent_name":
-                parent_pid = proc.ppid()
-                parent_name = _get_parent_name(parent_pid)
-                return parent_name.lower() == str(value).lower()
-
-            elif ctype == "file_path_contains":
-                exe = (proc.exe() or "").lower()
-                return str(value).lower() in exe
-
-            elif ctype == "user_writable_path":
-                exe = proc.exe() or ""
-                result = _is_user_writable(exe)
-                return result == bool(value)
-
-            elif ctype == "high_thread_count":
-                return proc.num_threads() > int(value)
-
-            elif ctype == "high_memory_mb":
-                rss_mb = proc.memory_info().rss / (1024 * 1024)
-                return rss_mb > float(value)
-
-            elif ctype == "network_connection":
-                conns = proc.connections()
-                established = [c for c in conns if c.status == 'ESTABLISHED']
-                return len(established) > 0
-
-            elif ctype == "child_of_browser":
-                parent_pid = proc.ppid()
-                parent_name = _get_parent_name(parent_pid).lower()
-                result = parent_name in BROWSER_PROCESS_NAMES
-                return result == bool(value)
-
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return False
-        except Exception:
-            return False
-
-        return False
-
-    @classmethod
-    def matches_rule(cls, rule: Dict, proc: psutil.Process, wmi_proc=None) -> bool:
-        conditions = rule.get("conditions", [])
-        if not conditions:
-            return False
-        mode = rule.get("condition_mode", "all")
-
-        if mode == "all":
-            return all(cls.evaluate_condition(c, proc, wmi_proc) for c in conditions)
-        elif mode == "any":
-            return any(cls.evaluate_condition(c, proc, wmi_proc) for c in conditions)
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Main engine
-# ---------------------------------------------------------------------------
-
-class SentinelBehavioralEngine(threading.Thread):
-    """
-    WMI-based process creation monitor applying behavioral rules.
-    """
-
-    def __init__(self, rules_path: str = DEFAULT_RULES_PATH, executioner=None):
-        super().__init__(daemon=True, name="SentinelBehavioral")
-        self.rules_path = rules_path
-        self.executioner = executioner
-        self.running = False
-        self.rules: List[Dict] = []
-        self._alerted_pids: Dict[int, float] = {}  # pid -> timestamp (cooldown)
-        self._lock = threading.Lock()
-        self._load_rules()
-
-    def _load_rules(self):
-        rules_data = DEFAULT_RULES.copy()
-
-        # Ensure rules file exists with defaults
-        if not os.path.exists(self.rules_path):
+    # --- psutil-driven polling loop ---
+    def _run(self) -> None:
+        self._heartbeat()
+        while not self._stopping():
             try:
-                os.makedirs(os.path.dirname(self.rules_path), exist_ok=True)
-                with open(self.rules_path, 'w') as f:
-                    json.dump(DEFAULT_RULES, f, indent=2)
-                _log(f"Created default behavioral rules at {self.rules_path}")
-            except Exception as e:
-                _log(f"Could not create rules file: {e}")
-        else:
-            try:
-                with open(self.rules_path, 'r') as f:
-                    rules_data = json.load(f)
-                _log(f"Loaded behavioral rules from {self.rules_path}")
-            except Exception as e:
-                _log(f"Rules load failed, using defaults: {e}")
+                self._poll_once()
+            except Exception:
+                pass
+            self._heartbeat()
+            if not self._sleep(self.config.get("poll_interval", 2.0)):
+                break
 
-        self.rules = [r for r in rules_data.get("rules", []) if r.get("enabled", True)]
-        _log(f"Active behavioral rules: {len(self.rules)}")
+    def _poll_once(self) -> None:
+        if psutil is None:
+            return
+        now = time.time()
+        self._poll_process_starts(now)
+        self._poll_net_connections(now)
 
-    def reload_rules(self):
-        self._load_rules()
-
-    def run(self):
-        self.running = True
-        _log("Behavioral Engine started")
+    def _poll_process_starts(self, now: float) -> None:
+        seen_pids = set()
         try:
-            brain, _, _, _ = _get_brain()
-            brain.set_module_running("BehavioralEngine", True)
+            iterator = psutil.process_iter(["pid", "name", "exe", "cmdline", "ppid"])
         except Exception:
-            pass
-        try:
-            c = wmi.WMI()
-            watcher = c.Win32_Process.watch_for("creation")
-            while self.running:
-                try:
-                    wmi_proc = watcher()
-                    if not self.running:
-                        break
-                    self._evaluate_new_process(wmi_proc)
-                except Exception as e:
-                    if self.running:
-                        _log(f"Watcher error: {e}")
-                        time.sleep(1)
-                        try:
-                            watcher = c.Win32_Process.watch_for("creation")
-                        except Exception:
-                            time.sleep(3)
-        except Exception as e:
-            _log(f"Behavioral Engine fatal: {e}\n{traceback.format_exc()}")
-
-    def stop(self):
-        self.running = False
-        try:
-            brain, _, _, _ = _get_brain()
-            brain.set_module_running("BehavioralEngine", False)
-        except Exception:
-            pass
-
-    def _evaluate_new_process(self, wmi_proc):
-        pid = wmi_proc.ProcessId
-        if not pid:
             return
 
-        # Cooldown: don't re-alert same PID within 60s
-        with self._lock:
-            last_alert = self._alerted_pids.get(pid, 0)
-            if time.time() - last_alert < 60:
-                return
-
-        try:
-            proc = psutil.Process(pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return
-
-        for rule in self.rules:
+        is_first_pass = not self._seeded
+        for p in iterator:
             try:
-                if RuleEvaluator.matches_rule(rule, proc, wmi_proc):
-                    self._handle_match(rule, proc)
-                    with self._lock:
-                        self._alerted_pids[pid] = time.time()
-                    break  # one match per process creation event
-            except Exception as e:
-                _log(f"Rule eval error [{rule.get('name')}]: {e}")
-
-    def _handle_match(self, rule: Dict, proc: psutil.Process):
-        name = rule.get("name", "Unknown Rule")
-        severity = rule.get("severity", "medium")
-        action = rule.get("action", "alert")
-        desc = rule.get("description", "")
-
-        try:
-            proc_name = proc.name()
-            proc_pid = proc.pid
-            exe = proc.exe()
-        except Exception:
-            proc_name, proc_pid, exe = "unknown", 0, ""
-
-        _log(
-            f"[BEHAVIORAL] MATCH: '{name}' | Severity: {severity} | "
-            f"Process: {proc_name} (PID {proc_pid}) | Action: {action}"
-        )
-
-        _toast(
-            f"Behavioral Alert [{severity.upper()}]",
-            f"Rule: {name}\nProcess: {proc_name}\n{desc[:80]}"
-        )
-
-        try:
-            brain, ThreatEvent, ThreatCategory, ThreatSeverity = _get_brain()
-            _sev_map = {
-                "info": ThreatSeverity.INFO, "low": ThreatSeverity.LOW,
-                "medium": ThreatSeverity.MEDIUM, "high": ThreatSeverity.HIGH,
-                "critical": ThreatSeverity.CRITICAL,
-            }
-            brain.emit_event(ThreatEvent(
-                category=ThreatCategory.BEHAVIORAL,
-                severity=_sev_map.get(severity.lower(), ThreatSeverity.MEDIUM),
-                title=f"Behavioral rule matched: {name}",
-                detail=f"Process: {proc_name} (PID {proc_pid}) — {desc}",
-                source_module="BehavioralEngine",
-                file_path=exe,
-                pid=proc_pid,
-                extra={"rule": name, "action": action},
-            ))
-        except Exception:
-            pass
-
-        if action in ("alert_and_kill", "quarantine"):
-            try:
-                proc.kill()
-                _log(f"[BEHAVIORAL] KILLED PID {proc_pid} ({proc_name})")
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                _log(f"[BEHAVIORAL] Kill failed for PID {proc_pid}: {e}")
-
-        if action == "quarantine" and exe and os.path.exists(exe) and self.executioner:
-            try:
-                self.executioner.handle_threat(exe)
-            except Exception as e:
-                _log(f"[BEHAVIORAL] Quarantine failed: {e}")
-
-    def scan_running_processes(self):
-        """One-time scan of currently running processes against all rules."""
-        _log("Running behavioral scan of active processes...")
-        hits = 0
-        for proc in psutil.process_iter(['pid', 'name']):
-            for rule in self.rules:
-                try:
-                    if RuleEvaluator.matches_rule(rule, proc):
-                        self._handle_match(rule, proc)
-                        hits += 1
-                        break
-                except Exception:
+                info = p.info
+                pid = info.get("pid")
+                if pid is None:
                     continue
-        _log(f"Behavioral scan complete: {hits} matches")
-        return hits
+                seen_pids.add(pid)
+                if pid in self._known_pids:
+                    continue
+                # Don't fire on every process already running when the
+                # engine starts up -- only newly created processes.
+                if not is_first_pass:
+                    parent_name = ""
+                    ppid = info.get("ppid")
+                    if ppid:
+                        try:
+                            parent_name = psutil.Process(ppid).name() or ""
+                        except Exception:
+                            parent_name = ""
+                    event = {
+                        "type": "process_start",
+                        "image": info.get("name") or "",
+                        "exe": info.get("exe") or "",
+                        "cmdline": " ".join(info.get("cmdline") or []),
+                        "parent": parent_name,
+                        "pid": pid,
+                    }
+                    self._feed_event(event, now)
+            except Exception:
+                continue
+
+        self._known_pids = seen_pids
+        self._seeded = True
+
+    def _poll_net_connections(self, now: float) -> None:
+        try:
+            conns = psutil.net_connections(kind="inet")
+        except Exception:
+            return
+        for c in conns:
+            try:
+                if not c.raddr:
+                    continue
+                event = {
+                    "type": "net_connect",
+                    "remote_ip": c.raddr.ip,
+                    "remote_port": c.raddr.port,
+                    "pid": c.pid,
+                }
+                self._feed_event(event, now)
+            except Exception:
+                continue
+
+
+if __name__ == "__main__":
+    svc = BehavioralEngine()
+    svc.start()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        svc.stop()

@@ -1,218 +1,38 @@
 {
   "rules": [
     {
-      "name": "LOLBin URL Download via certutil",
-      "enabled": true,
-      "severity": "high",
-      "description": "certutil.exe used to download files \u2014 classic malware dropper technique",
+      "id": "encoded_powershell",
+      "name": "Encoded PowerShell Execution",
+      "event": "process_start",
+      "severity": "HIGH",
+      "threshold": 1,
+      "window_seconds": null,
       "conditions": [
-        {
-          "type": "process_name",
-          "value": "certutil.exe"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "-urlcache"
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert_and_kill"
+        {"field": "image", "op": "contains", "value": "powershell"},
+        {"field": "cmdline", "op": "regex", "value": "-[eE]nc"}
+      ]
     },
     {
-      "name": "PowerShell Encoded Command",
-      "enabled": true,
-      "severity": "high",
-      "description": "PowerShell running encoded (obfuscated) commands",
+      "id": "credential_dumper_mimikatz",
+      "name": "Credential Dumper (mimikatz.exe)",
+      "event": "process_start",
+      "severity": "CRITICAL",
+      "threshold": 1,
+      "window_seconds": null,
       "conditions": [
-        {
-          "type": "process_name",
-          "value": "powershell.exe"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "-EncodedCommand"
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert"
+        {"field": "image", "op": "eq", "value": "mimikatz.exe"}
+      ]
     },
     {
-      "name": "PowerShell Download Cradle",
-      "enabled": true,
-      "severity": "high",
-      "description": "PowerShell downloading and executing remote content (IEX / Invoke-Expression)",
+      "id": "repeated_suspicious_ip_connects",
+      "name": "Repeated Connections to Suspicious IP Range",
+      "event": "net_connect",
+      "severity": "MEDIUM",
+      "threshold": 5,
+      "window_seconds": 30,
       "conditions": [
-        {
-          "type": "process_name",
-          "value": "powershell.exe"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "IEX"
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert"
-    },
-    {
-      "name": "Mshta Scriptlet Execution",
-      "enabled": true,
-      "severity": "high",
-      "description": "mshta.exe executing a remote script \u2014 common for JS/VBS malware",
-      "conditions": [
-        {
-          "type": "process_name",
-          "value": "mshta.exe"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "http"
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert_and_kill"
-    },
-    {
-      "name": "Regsvr32 Remote COM Execution (Squiblydoo)",
-      "enabled": true,
-      "severity": "critical",
-      "description": "regsvr32.exe loading a remote COM scriptlet \u2014 Squiblydoo bypass",
-      "conditions": [
-        {
-          "type": "process_name",
-          "value": "regsvr32.exe"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "/s"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "http"
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert_and_kill"
-    },
-    {
-      "name": "Browser Spawning Script Interpreter",
-      "enabled": true,
-      "severity": "high",
-      "description": "Browser launched cmd/powershell/wscript \u2014 malicious iframe or drive-by",
-      "conditions": [
-        {
-          "type": "child_of_browser",
-          "value": true
-        },
-        {
-          "type": "process_name_in",
-          "value": [
-            "cmd.exe",
-            "powershell.exe",
-            "wscript.exe",
-            "cscript.exe"
-          ]
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert_and_kill"
-    },
-    {
-      "name": "WMI Spawning Shell",
-      "enabled": true,
-      "severity": "high",
-      "description": "WMI provider host spawning a shell \u2014 WMI-based lateral movement",
-      "conditions": [
-        {
-          "type": "parent_name",
-          "value": "WmiPrvSE.exe"
-        },
-        {
-          "type": "process_name_in",
-          "value": [
-            "cmd.exe",
-            "powershell.exe",
-            "wscript.exe"
-          ]
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert_and_kill"
-    },
-    {
-      "name": "RunDLL32 Remote Payload",
-      "enabled": true,
-      "severity": "high",
-      "description": "rundll32.exe loading a remote or temp-directory DLL",
-      "conditions": [
-        {
-          "type": "process_name",
-          "value": "rundll32.exe"
-        },
-        {
-          "type": "cmdline_contains",
-          "value": "\\temp\\"
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert"
-    },
-    {
-      "name": "Suspicious Process from Temp Directory",
-      "enabled": true,
-      "severity": "medium",
-      "description": "Executable launched directly from %TEMP% \u2014 typical malware dropper",
-      "conditions": [
-        {
-          "type": "file_path_contains",
-          "value": "\\temp\\"
-        },
-        {
-          "type": "user_writable_path",
-          "value": true
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert"
-    },
-    {
-      "name": "Process with Extremely High Thread Count",
-      "enabled": true,
-      "severity": "medium",
-      "description": "Possible process hollowing or thread injection",
-      "conditions": [
-        {
-          "type": "high_thread_count",
-          "value": 200
-        },
-        {
-          "type": "user_writable_path",
-          "value": true
-        }
-      ],
-      "condition_mode": "all",
-      "action": "alert"
-    },
-    {
-      "name": "LSASS Memory Access Attempt",
-      "enabled": true,
-      "severity": "critical",
-      "description": "Non-system process attempting to open LSASS \u2014 credential dumping",
-      "conditions": [
-        {
-          "type": "process_name_in",
-          "value": [
-            "procdump.exe",
-            "mimikatz.exe",
-            "wce.exe",
-            "fgdump.exe",
-            "pwdump.exe",
-            "gsecdump.exe"
-          ]
-        }
-      ],
-      "condition_mode": "any",
-      "action": "alert_and_kill"
+        {"field": "remote_ip", "op": "startswith", "value": "185."}
+      ]
     }
   ]
 }
