@@ -26,3 +26,13 @@ def test_benign_install_no_emit(fake_brain):
     after["Good"] = {"name": "Good", "publisher": "BigCo", "install_location": r"C:\Program Files\Good", "main_exe": None}
     s._process_snapshot(before, after)
     assert fake_brain.threats == []
+
+
+def test_uninstall_leftovers_emit(fake_brain, tmp_path):
+    from Services.Sense.SentinelSense import SentinelSense
+    s = SentinelSense(brain=fake_brain)
+    leftover_dir = tmp_path / "GhostApp"; leftover_dir.mkdir()
+    before = {"Ghost": {"name": "GhostApp", "publisher": "X", "install_location": str(leftover_dir), "main_exe": None}}
+    after = {}   # uninstalled, but the dir still exists on disk
+    s._process_snapshot(before, after)
+    assert any("leftover" in (t.get("title","").lower()) for t in fake_brain.threats)

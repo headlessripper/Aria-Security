@@ -1,4 +1,4 @@
-from Services.Sense.SentinelSense import diff_installs, classify_install
+from Services.Sense.SentinelSense import diff_installs, classify_install, _clean_exe_path
 
 def test_diff_installs_detects_add_and_remove():
     before = {"AppA": {"name": "AppA"}}
@@ -27,3 +27,11 @@ def test_classify_clean_no_signals():
     info = {"name": "x", "publisher": "Acme", "install_location": r"C:\Program Files\X", "main_exe": None}
     sus, _ = classify_install(info, is_trusted_exe=None)
     assert sus is False
+
+def test_clean_exe_path_strips_icon_index():
+    assert _clean_exe_path(r"C:\App\app.exe,0") == r"C:\App\app.exe"
+    assert _clean_exe_path(r'"C:\App\app.exe"') == r"C:\App\app.exe"
+    assert _clean_exe_path(r"C:\App\app.exe") == r"C:\App\app.exe"
+    assert _clean_exe_path(r"C:\App\app.exe,-1") == r"C:\App\app.exe"
+    assert _clean_exe_path(None) is None
+    assert _clean_exe_path("") is None

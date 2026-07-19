@@ -47,6 +47,20 @@ def classify_install(app_info: dict, is_trusted_exe=None) -> tuple:
     return suspicious, "; ".join(reasons)
 
 
+def _clean_exe_path(display_icon):
+    """Extract a bare exe path from a DisplayIcon value like 'C:\\App\\app.exe,0'
+    or '"C:\\App\\app.exe"'. Strips surrounding quotes and a trailing ,<index>."""
+    if not display_icon:
+        return None
+    s = str(display_icon).strip().strip('"').strip()
+    if "," in s:
+        head, _, tail = s.rpartition(",")
+        if tail.strip().lstrip("-").isdigit():
+            s = head
+    s = s.strip().strip('"').strip()
+    return s or None
+
+
 # ---------------------------------------------------------------------------
 # SentinelSense service — system-change monitor over the detection core above.
 #
@@ -168,7 +182,7 @@ class SentinelSense(BaseService):
                                 "name": _reg_value(k, "DisplayName"),
                                 "publisher": _reg_value(k, "Publisher"),
                                 "install_location": _reg_value(k, "InstallLocation"),
-                                "main_exe": _reg_value(k, "DisplayIcon"),
+                                "main_exe": _clean_exe_path(_reg_value(k, "DisplayIcon")),
                                 "uninstall_string": _reg_value(k, "UninstallString"),
                             }
                     except Exception:
@@ -231,8 +245,12 @@ class SentinelSense(BaseService):
 
     # -- main loop -----------------------------------------------------------
     def _run(self) -> None:
-        snap = self._snapshot_installed()
-        self._persist(snap)
+        try:
+            snap = self._snapshot_installed()
+            self._persist(snap)
+        except Exception as e:
+            self._log(f"initial snapshot error: {e}", "ERROR")
+            snap = {}
         while not self._stopping():
             self._heartbeat()
             if not self._sleep(float(self.config.get("scan_interval", 30.0))):
