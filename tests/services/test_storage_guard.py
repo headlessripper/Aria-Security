@@ -38,3 +38,18 @@ def test_allowlisted_drive_skipped(fake_brain):
     # a helper that decides whether to scan a newly-seen drive
     assert g._should_scan({"letter": "E:", "drive_type": 2, "bus_type": 7, "serial": "VOL-1"}) is False
     assert g._should_scan({"letter": "F:", "drive_type": 2, "bus_type": 7, "serial": "OTHER"}) is True
+
+
+def test_init_guard_accepts_scanner_executor():
+    from Services.SentinelUSBGuard import init_guard, StorageGuard
+    g = init_guard(object(), object())          # matches the live 2-arg caller
+    assert isinstance(g, StorageGuard)
+
+
+def test_backcompat_methods_safe(fake_brain):
+    from Services.SentinelUSBGuard import StorageGuard
+    g = StorageGuard(brain=fake_brain)
+    assert g.handle_insertion("E:") is None      # no-op, no raise
+    assert g.unlock("E:") is True
+    assert g.trust_and_unlock(serial="VOL-9") is True
+    assert "VOL-9" in g.config["allowlist"]       # trusting adds to allowlist

@@ -112,6 +112,22 @@ class StorageGuard(BaseService):
         global _GUARD_SINGLETON
         _GUARD_SINGLETON = self
 
+    # -- back-compat (old reactive block-until-scanned API) ------------------
+    def handle_insertion(self, *args, **kwargs):
+        """Back-compat no-op: the guard self-polls for new drives; nothing to do here."""
+        return None
+
+    def trust_and_unlock(self, letter=None, serial=None):
+        """Back-compat: scan-then-warn never locks, so 'unlock' is a no-op; if a serial
+        is given, add it to the allowlist so the device is trusted going forward."""
+        if serial:
+            self.config.setdefault("allowlist", set()).add(serial)
+        return True
+
+    def unlock(self, letter=None):
+        """Back-compat no-op (scan-then-warn does not lock drives)."""
+        return True
+
     # -- classification ------------------------------------------------------
     def _should_scan(self, drive_info):
         """True if the drive is external AND not allowlisted."""
@@ -241,13 +257,14 @@ class StorageGuard(BaseService):
                 )
                 if not ok:
                     return 0, False
-                # STORAGE_DEVICE_DESCRIPTOR: BusType is the 5th DWORD field,
-                # RemovableMedia is a BOOLEAN at offset 16.
+                # STORAGE_DEVICE_DESCRIPTOR: BusType is the 5th DWORD field at
+                # offset 28. RemovableMedia is a BOOLEAN at offset 10 (offset 16
+                # is ProductIdOffset).
                 bus_type = ctypes.cast(
                     ctypes.byref(buf, 28), ctypes.POINTER(ctypes.c_ulong)
                 ).contents.value
                 removable = bool(ctypes.cast(
-                    ctypes.byref(buf, 16), ctypes.POINTER(ctypes.c_byte)
+                    ctypes.byref(buf, 10), ctypes.POINTER(ctypes.c_byte)
                 ).contents.value)
                 return bus_type, removable
             finally:
@@ -322,11 +339,15 @@ def get_guard():
     return _GUARD_SINGLETON
 
 
-def init_guard(brain=None) -> "StorageGuard":
-    """Create (or return) the StorageGuard singleton — called by SentinelService_v2."""
+def init_guard(scanner=None, executor=None, brain=None) -> "StorageGuard":
+    """Create/return the StorageGuard singleton. `scanner` (a preloaded VirusScanner)
+    and `executor` are accepted for back-compat with the existing call site; if a
+    scanner is provided it is reused (avoids loading a second YARA/ONNX engine)."""
     global _GUARD_SINGLETON
     if _GUARD_SINGLETON is None:
         _GUARD_SINGLETON = StorageGuard(brain=brain)
+    if scanner is not None:
+        _GUARD_SINGLETON._scanner = scanner
     return _GUARD_SINGLETON
 
 
