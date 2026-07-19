@@ -68,7 +68,12 @@ Real-time file-system defense. Watches configured dirs (`watch_dirs`) via **`wat
 3. **Canary tripwire** — hidden honeypot files (`canary_count`, default 3) seeded in watched dirs; ANY modify/delete/rename of a canary → immediate CRITICAL (highest confidence).
 4. **Known ransom extensions** — new files with extensions in a configurable set (`.locked`, `.crypto`, `.enc`, `.ryk`, …) → trip.
 
-**On trip:** `emit_threat(RANSOMWARE, CRITICAL, detail, source=<path/proc>)`; best-effort identify the offending process (recent writer to the watched tree via psutil, or the process holding the canary handle) and, if `action` config allows, `psutil.Process.suspend()` it; optionally quarantine touched files. All thresholds/actions are config. State persisted to `~/.AriaSecurity/ransom_state.json` for the UI.
+**Response — graduated by confidence, with a hard safety guard:** always `emit_threat(RANSOMWARE, CRITICAL, detail, source=<path/proc>)`, then apply the default `action` policy:
+- **High confidence** — a **canary trip**, OR **≥2 detectors firing within the same window** → best-effort identify the offending process (recent writer to the watched tree / canary handle holder via psutil) and **suspend it** (`psutil.Process.suspend()`) + quarantine touched files.
+- **Heuristic (single detector: velocity OR entropy OR extension alone)** → **alert + monitor**; escalate to suspend if it persists into the next window.
+- **Safety guard (never violated):** never suspend a process that is validly signed/trusted (reuse `Engine.Detection.cert_reputation.CertReputation`) or is a critical system process (configurable PID/image allowlist) — those downgrade to alert-only.
+
+All thresholds, the confidence policy, and the allowlist are config; `action` can be overridden to `alert_only` or `always_suspend`. State persisted to `~/.AriaSecurity/ransom_state.json` for the UI.
 
 ### 3.2 ExploitProtection (`Services/Protection/SentinelExploitProtection.py`)
 User-mode process-behavior heuristics via `psutil` polling (interval config). Detectors:
