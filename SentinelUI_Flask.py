@@ -202,6 +202,10 @@ threading.Thread(target=_state_pusher, daemon=True, name="StatePusher").start()
 # ── Scan history / Scheduler helpers ─────────────────────────────────────────
 import Services.SentinelScanHistory as _sh
 import Services.SentinelScheduler   as _sched
+from Services.monitors import (
+    system_monitor, process_monitor, netstat,
+    console_logs, geo_blocks, mem_scan,
+)
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
@@ -919,37 +923,18 @@ _LOG_FILES = [
 
 @app.route("/api/console/logs")
 def api_console_logs():
-    n      = int(request.args.get("lines", 400))
-    module = request.args.get("module", "").lower()
+    n = int(request.args.get("lines", 400))
+    module = request.args.get("module", "")
     try:
-        all_lines: list[str] = []
-        for fname in _LOG_FILES:
-            if module and module not in fname.lower():
-                continue
-            lp = _LOG_DIR / fname
-            if not lp.exists():
-                continue
-            stem = lp.stem
-            with lp.open("r", encoding="utf-8", errors="replace") as f:
-                chunk = f.readlines()[-200:]
-            all_lines.extend(f"[{stem}] {l.rstrip()}" for l in chunk if l.strip())
-        return jsonify({"lines": all_lines[-n:]})
+        return jsonify({"lines": console_logs.tail(_LOG_DIR, _LOG_FILES, n, module)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/console/clear", methods=["POST"])
 def api_console_clear():
-    module = (request.json or {}).get("module", "").lower()
-    cleared = 0
+    module = (request.json or {}).get("module", "")
     try:
-        for fname in _LOG_FILES:
-            if module and module not in fname.lower():
-                continue
-            lp = _LOG_DIR / fname
-            if lp.exists():
-                lp.write_text("", encoding="utf-8")
-                cleared += 1
-        return jsonify({"status": "cleared", "files": cleared})
+        return jsonify({"status": "cleared", "files": console_logs.clear(_LOG_DIR, _LOG_FILES, module)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1156,27 +1141,7 @@ def api_sandbox_detonate():
 @app.route("/api/memory")
 def api_memory_get():
     try:
-        import psutil
-        vm   = psutil.virtual_memory()
-        proc = psutil.Process()
-        top_procs = []
-        for p in psutil.process_iter(["pid", "name", "memory_info"]):
-            try:
-                mi = p.info.get("memory_info")
-                if mi:
-                    top_procs.append({"pid": p.info["pid"], "name": p.info.get("name","?"),
-                                      "mb": round(mi.rss / 1048576, 1)})
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        top_procs.sort(key=lambda x: x["mb"], reverse=True)
-        return jsonify({
-            "total":       vm.total,
-            "used":        vm.used,
-            "free":        vm.free,
-            "percent":     vm.percent,
-            "sentinel_mb": round(proc.memory_info().rss / 1048576, 1),
-            "top_procs":   top_procs[:20],
-        })
+        return jsonify(system_monitor.memory_snapshot())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1189,116 +1154,44 @@ def api_memory_scan():
     _mem_scan_running["active"] = True
 
     def _do():
-        import psutil
-        results = []
-        checked = 0
         try:
             if "cls" not in _svc_module:
                 socketio.emit("memory_scan_done", {"error": "Service not loaded yet", "results": []})
                 return
-            svc = _state._svc_instance
-            if svc is None:
-                svc = _svc_module["cls"]()
-                _state._svc_instance = svc
+            svc = _state._svc_instance or _svc_module["cls"]()
+            _state._svc_instance = svc
             scanner = getattr(getattr(svc, "worker", None), "scanner", None)
             if scanner is None:
                 socketio.emit("memory_scan_done", {"error": "Scanner unavailable", "results": []})
                 return
-            procs = list(psutil.process_iter(["pid", "name", "exe"]))
-            total = len(procs)
-            socketio.emit("memory_scan_progress", {"checked": 0, "total": total, "status": "scanning"})
-            for proc in procs:
-                try:
-                    exe = proc.info.get("exe") or ""
-                    if not exe or not os.path.exists(exe):
-                        checked += 1
-                        continue
-                    result = scanner.scan_file(exe)
-                    verdict = (result or {}).get("verdict", "CLEAN")
-                    if verdict in ("MALWARE", "SUSPICIOUS"):
-                        results.append({
-                            "pid": proc.info["pid"], "name": proc.info.get("name","?"),
-                            "exe": exe, "verdict": verdict,
-                            "reasons": (result or {}).get("reasons", [])[:3],
-                        })
-                        from Services.SentinelBrain import ThreatCategory, ThreatSeverity
-                        get_brain().emit_event(ThreatEvent(
-                            category=ThreatCategory.MALWARE, severity=ThreatSeverity.CRITICAL,
-                            title=f"Memory threat: {proc.info.get('name','?')} (PID {proc.info['pid']})",
-                            detail=f"{verdict} — {exe}", source_module="MemoryScanner",
-                            file_path=exe, pid=proc.info["pid"],
-                        ))
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-                except Exception:
-                    pass
-                checked += 1
-                if checked % 25 == 0:
-                    socketio.emit("memory_scan_progress", {"checked": checked, "total": total, "status": "scanning"})
+
+            def _on_progress(checked, total):
+                socketio.emit("memory_scan_progress", {"checked": checked, "total": total, "status": "scanning"})
+
+            def _on_threat(row):
+                from Services.SentinelBrain import ThreatCategory, ThreatSeverity
+                get_brain().emit_event(ThreatEvent(
+                    category=ThreatCategory.MALWARE, severity=ThreatSeverity.CRITICAL,
+                    title=f"Memory threat: {row['name']} (PID {row['pid']})",
+                    detail=f"{row['verdict']} — {row['exe']}", source_module="MemoryScanner",
+                    file_path=row["exe"], pid=row["pid"],
+                ))
+
+            results = mem_scan.scan_processes(scanner, on_progress=_on_progress, on_threat=_on_threat)
+            socketio.emit("memory_scan_done",
+                          {"results": results, "threats": len(results), "status": "done"})
         except Exception as exc:
-            socketio.emit("memory_scan_done", {"error": str(exc), "results": results})
-            return
+            socketio.emit("memory_scan_done", {"error": str(exc), "results": []})
         finally:
             _mem_scan_running["active"] = False
-        socketio.emit("memory_scan_done", {"results": results, "checked": checked, "threats": len(results), "status": "done"})
 
     threading.Thread(target=_do, daemon=True, name="MemScan").start()
     return jsonify({"status": "started"})
 
 @app.route("/api/memory/clean", methods=["POST"])
 def api_memory_clean():
-    """
-    Trim working sets of all accessible processes via SetProcessWorkingSetSize.
-    SetProcessWorkingSetSize(h, SIZE_MAX, SIZE_MAX) forces the kernel to trim
-    the working set to the minimum allowed for that process.
-    """
-    import psutil
-    import ctypes
-    import ctypes.wintypes
-
-    kernel32 = ctypes.windll.kernel32
-
-    # Declare argtypes so ctypes passes the right-sized values
-    kernel32.OpenProcess.argtypes          = [ctypes.wintypes.DWORD,
-                                               ctypes.wintypes.BOOL,
-                                               ctypes.wintypes.DWORD]
-    kernel32.OpenProcess.restype           = ctypes.wintypes.HANDLE
-    kernel32.SetProcessWorkingSetSize.argtypes = [ctypes.wintypes.HANDLE,
-                                                    ctypes.c_size_t,
-                                                    ctypes.c_size_t]
-    kernel32.SetProcessWorkingSetSize.restype  = ctypes.wintypes.BOOL
-    kernel32.CloseHandle.argtypes          = [ctypes.wintypes.HANDLE]
-    kernel32.CloseHandle.restype           = ctypes.wintypes.BOOL
-
-    PROCESS_SET_QUOTA         = 0x0100
-    PROCESS_QUERY_INFORMATION = 0x0400
-    ACCESS = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION
-    SIZE_MAX = ctypes.c_size_t(-1).value  # (size_t)(-1) = trim to minimum
-
-    cleaned = 0
-    failed  = 0
-
-    # Trim our own process first (always succeeds)
-    kernel32.SetProcessWorkingSetSize(
-        kernel32.GetCurrentProcess(), SIZE_MAX, SIZE_MAX
-    )
-
-    for proc in psutil.process_iter(["pid"]):
-        try:
-            pid = proc.info["pid"]
-            if pid == 0:
-                continue
-            h = kernel32.OpenProcess(ACCESS, False, pid)
-            if h:
-                kernel32.SetProcessWorkingSetSize(h, SIZE_MAX, SIZE_MAX)
-                kernel32.CloseHandle(h)
-                cleaned += 1
-            else:
-                failed += 1
-        except Exception:
-            failed += 1
-
-    return jsonify({"status": "cleaned", "processes": cleaned, "skipped": failed})
+    r = system_monitor.trim_working_sets()
+    return jsonify({"status": "cleaned", "processes": r["cleaned"], "skipped": r["skipped"]})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PROCESS THREATS (risk scoring)
@@ -1306,33 +1199,10 @@ def api_memory_clean():
 
 @app.route("/api/process_threats")
 def api_process_threats():
-    import psutil
-    rows = []
     try:
-        for proc in psutil.process_iter(["pid", "name", "exe", "ppid"]):
-            try:
-                info = proc.info
-                score = 0
-                name  = (info.get("name") or "").lower()
-                exe   = info.get("exe") or ""
-                if any(x in name for x in ["cryptominer","miner","payload","injector","keylog"]):
-                    score += 50
-                if info.get("ppid") in [0, 4] and "system" not in name:
-                    score += 15
-                if exe and not os.path.exists(exe):
-                    score += 25
-                if "temp" in exe.lower() or "appdata\\local\\temp" in exe.lower():
-                    score += 20
-                if name.endswith(".exe") and len(name) <= 5:
-                    score += 10
-                rows.append({"pid": info["pid"], "name": info.get("name","?"),
-                             "path": exe, "score": min(score, 100)})
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        rows.sort(key=lambda x: x["score"], reverse=True)
+        return jsonify(process_monitor.process_threats())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify(rows[:200])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TASK MANAGER (full process list)
@@ -1340,38 +1210,17 @@ def api_process_threats():
 
 @app.route("/api/tasks")
 def api_tasks():
-    import psutil
-    rows = []
     try:
-        for proc in psutil.process_iter(["pid","name","exe","status","cpu_percent","memory_info"]):
-            try:
-                mi = proc.info.get("memory_info")
-                rows.append({
-                    "pid":    proc.info["pid"],
-                    "name":   proc.info.get("name","?"),
-                    "status": proc.info.get("status","?"),
-                    "cpu":    round(proc.info.get("cpu_percent") or 0, 1),
-                    "mb":     round(mi.rss / 1048576, 1) if mi else 0,
-                    "path":   proc.info.get("exe") or "",
-                })
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+        return jsonify(process_monitor.task_list())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    rows.sort(key=lambda x: x["mb"], reverse=True)
-    return jsonify(rows[:300])
 
 @app.route("/api/tasks/<int:pid>/kill", methods=["POST"])
 def api_task_kill(pid):
-    import psutil
-    try:
-        p = psutil.Process(pid)
-        p.terminate()
-        return jsonify({"status": "terminated", "pid": pid})
-    except psutil.NoSuchProcess:
-        return jsonify({"error": "process not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    r = process_monitor.kill(pid)
+    if "error" in r:
+        return jsonify(r), (404 if r["error"] == "process not found" else 500)
+    return jsonify(r)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NETWORK MONITOR
@@ -1385,30 +1234,10 @@ def api_network_events():
 
 @app.route("/api/network/connections")
 def api_network_connections():
-    import psutil
-    conns = []
     try:
-        for c in psutil.net_connections(kind="inet"):
-            try:
-                proc_name = ""
-                if c.pid:
-                    try:
-                        proc_name = psutil.Process(c.pid).name()
-                    except Exception:
-                        pass
-                conns.append({
-                    "pid":     c.pid,
-                    "proc":    proc_name,
-                    "laddr":   f"{c.laddr.ip}:{c.laddr.port}" if c.laddr else "—",
-                    "raddr":   f"{c.raddr.ip}:{c.raddr.port}" if c.raddr else "—",
-                    "status":  c.status,
-                    "family":  "TCP" if c.type == 1 else "UDP",
-                })
-            except Exception:
-                pass
+        return jsonify(netstat.connections())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify(conns[:200])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GEO BLOCKS
@@ -1419,18 +1248,14 @@ _GEO_PATH = Path.home() / ".AriaSecurity" / "geo_blocks.json"
 @app.route("/api/geo_blocks")
 def api_geo_blocks_get():
     try:
-        if _GEO_PATH.exists():
-            return jsonify(json.loads(_GEO_PATH.read_text(encoding="utf-8")))
-        return jsonify({})
+        return jsonify(geo_blocks.load(_GEO_PATH))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/geo_blocks", methods=["POST"])
 def api_geo_blocks_set():
-    d = request.json or {}
     try:
-        _GEO_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _GEO_PATH.write_text(json.dumps(d, indent=2), encoding="utf-8")
+        geo_blocks.save(_GEO_PATH, request.json or {})
         return jsonify({"status": "saved"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1457,26 +1282,10 @@ def api_ti_stats():
 
 @app.route("/api/storage")
 def api_storage():
-    import psutil
-    disks = []
     try:
-        for part in psutil.disk_partitions(all=False):
-            try:
-                usage = psutil.disk_usage(part.mountpoint)
-                disks.append({
-                    "device":     part.device,
-                    "mountpoint": part.mountpoint,
-                    "fstype":     part.fstype,
-                    "total":      usage.total,
-                    "used":       usage.used,
-                    "free":       usage.free,
-                    "percent":    usage.percent,
-                })
-            except (PermissionError, OSError):
-                pass
+        return jsonify(system_monitor.list_disks())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify(disks)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVICE CONTROL
@@ -1836,20 +1645,8 @@ def api_tools_traceroute():
 
 @app.route("/api/net_scope")
 def api_net_scope():
-    import psutil
     try:
-        ifaces = psutil.net_io_counters(pernic=True, nowrap=True)
-        out = {}
-        for name, s in ifaces.items():
-            out[name] = {
-                "bytes_sent":    s.bytes_sent,
-                "bytes_recv":    s.bytes_recv,
-                "packets_sent":  s.packets_sent,
-                "packets_recv":  s.packets_recv,
-                "dropin":        getattr(s, "dropin",  0),
-                "dropout":       getattr(s, "dropout", 0),
-            }
-        return jsonify(out)
+        return jsonify(netstat.interface_counters())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
