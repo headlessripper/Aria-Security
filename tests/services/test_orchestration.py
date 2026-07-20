@@ -34,3 +34,10 @@ def test_device_services_start_stop(fake_brain):
     assert all(s.is_running() for s in svcs)
     for s in svcs: s.stop()
     assert not any(s.is_running() for s in svcs)
+
+
+def test_scheduler_starts_stops(fake_brain):
+    from Services.SentinelScheduler import Scheduler
+    s = Scheduler(brain=fake_brain, on_scan_due=lambda sid, p: None)
+    s.start(); assert s.is_running() is True
+    s.stop();  assert s.is_running() is False

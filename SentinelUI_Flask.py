@@ -1595,7 +1595,7 @@ _AVB_MODEL_URL = (
     "/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
 )
 _AVB_MODEL_DIR  = Path.home() / ".AriaSecurity" / "avbrain"
-_AVB_MODEL_FILE = _AVB_MODEL_DIR / "Phi-3.5-mini-instruct-Q4_K_M.gguf"
+_AVB_MODEL_FILE = _AVB_MODEL_DIR / "Sentinel_A1.gguf"
 _AVB_DOWNLOAD   = {"active": False}
 
 @app.route("/api/avbrain/model/status")
@@ -1875,7 +1875,7 @@ def _on_scan_due(sid: str, scan_path: str):
     threading.Thread(target=_do, daemon=True).start()
     socketio.emit("scan_started", {"scheduled_id": sid, "path": scan_path})
 
-_scheduler = _sched.SchedulerThread(on_scan_due=_on_scan_due)
+_scheduler = _sched.Scheduler(on_scan_due=_on_scan_due)
 _scheduler.start()
 
 # ══════════════════════════════════════════════════════════════════════════════
