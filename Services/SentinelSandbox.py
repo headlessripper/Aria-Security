@@ -89,6 +89,19 @@ def _snapshot_connections() -> Set[tuple]:
     return conns
 
 
+def diff_snapshots(before: Dict, after: Dict) -> Dict:
+    """
+    Pure diff of two snapshot dicts, each shaped {"procs": {pid: name}, "conns": {(ip, port), ...}}.
+    Returns {"new_processes": {pid: name}, "new_connections": set of (ip, port)}.
+    """
+    bp, ap = before.get("procs", {}), after.get("procs", {})
+    bc, ac = before.get("conns", set()), after.get("conns", set())
+    return {
+        "new_processes": {k: v for k, v in ap.items() if k not in bp},
+        "new_connections": ac - bc,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
@@ -107,6 +120,7 @@ class SandboxReport:
     verdict: str = "UNKNOWN"                # CLEAN | SUSPICIOUS | MALICIOUS | ERROR
     error: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    status: str = "ok"                      # "ok" | "unavailable" | "error"
 
     def to_dict(self) -> Dict:
         return {
@@ -122,6 +136,7 @@ class SandboxReport:
             "verdict": self.verdict,
             "error": self.error,
             "timestamp": self.timestamp,
+            "status": self.status,
         }
 
     @property
@@ -144,61 +159,81 @@ def run_in_windows_sandbox(file_path: str, timeout: int = 60) -> SandboxReport:
     Detonate file in Windows Sandbox (isolated Hyper-V VM).
     NOTE: This runs in a fully isolated environment — no monitoring of internals.
     We observe network connections from the host side only.
+
+    Gracefully degrades: if WSB isn't available, or anything about the WSB
+    launch/observation fails (Home edition, no Hyper-V, missing exe, etc.),
+    this returns a status="unavailable" report instead of raising.
     """
-    sha256 = _sha256(file_path)
-    host_dir = os.path.dirname(os.path.abspath(file_path))
-    exe_name = os.path.basename(file_path)
-    # Inside sandbox, mapped folder appears as C:\Users\WDAGUtilityAccount\Desktop\[folder_name]
-    sandbox_folder = f"C:\\Users\\WDAGUtilityAccount\\Desktop\\{os.path.basename(host_dir)}"
-    sandbox_exe = f"{sandbox_folder}\\{exe_name}"
-
-    wsb_content = WSB_TEMPLATE.format(host_folder=host_dir, exe_path=sandbox_exe)
-
-    tmp_wsb = tempfile.NamedTemporaryFile(suffix=".wsb", delete=False, mode='w')
-    tmp_wsb.write(wsb_content)
-    tmp_wsb.close()
-
-    pre_conns = _snapshot_connections()
-    start = time.time()
+    if not _is_wsb_available():
+        return SandboxReport(
+            file_path=file_path, sha256="", mode="windows_sandbox",
+            error="Windows Sandbox not available on this system", verdict="ERROR",
+            status="unavailable",
+        )
 
     try:
-        proc = subprocess.Popen(
-            ['WindowsSandbox.exe', tmp_wsb.name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(min(timeout, DETONATION_TIMEOUT))
-        proc.terminate()
-    except Exception as e:
-        return SandboxReport(
-            file_path=file_path, sha256=sha256, mode="windows_sandbox",
-            error=str(e), verdict="ERROR"
-        )
-    finally:
+        sha256 = _sha256(file_path)
+        host_dir = os.path.dirname(os.path.abspath(file_path))
+        exe_name = os.path.basename(file_path)
+        # Inside sandbox, mapped folder appears as C:\Users\WDAGUtilityAccount\Desktop\[folder_name]
+        sandbox_folder = f"C:\\Users\\WDAGUtilityAccount\\Desktop\\{os.path.basename(host_dir)}"
+        sandbox_exe = f"{sandbox_folder}\\{exe_name}"
+
+        wsb_content = WSB_TEMPLATE.format(host_folder=host_dir, exe_path=sandbox_exe)
+
+        tmp_wsb = tempfile.NamedTemporaryFile(suffix=".wsb", delete=False, mode='w')
+        tmp_wsb.write(wsb_content)
+        tmp_wsb.close()
+
+        pre_conns = _snapshot_connections()
+        start = time.time()
+
         try:
-            os.unlink(tmp_wsb.name)
-        except Exception:
-            pass
+            proc = subprocess.Popen(
+                ['WindowsSandbox.exe', tmp_wsb.name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(min(timeout, DETONATION_TIMEOUT))
+            proc.terminate()
+        except Exception as e:
+            return SandboxReport(
+                file_path=file_path, sha256=sha256, mode="windows_sandbox",
+                error=str(e), verdict="ERROR", status="unavailable",
+            )
+        finally:
+            try:
+                os.unlink(tmp_wsb.name)
+            except Exception:
+                pass
 
-    post_conns = _snapshot_connections()
-    new_conns = list(post_conns - pre_conns)
-    duration = time.time() - start
+        post_conns = _snapshot_connections()
+        diff = diff_snapshots({"conns": pre_conns}, {"conns": post_conns})
+        new_conns = list(diff["new_connections"])
+        duration = time.time() - start
 
-    indicators = []
-    if new_conns:
-        indicators.append(f"Made {len(new_conns)} network connection(s) during execution")
+        indicators = []
+        if new_conns:
+            indicators.append(f"Made {len(new_conns)} network connection(s) during execution")
 
-    verdict = "SUSPICIOUS" if indicators else "UNKNOWN"
+        verdict = "SUSPICIOUS" if indicators else "UNKNOWN"
 
-    return SandboxReport(
-        file_path=file_path,
-        sha256=sha256,
-        mode="windows_sandbox",
-        duration_seconds=round(duration, 2),
-        new_connections=new_conns,
-        suspicious_indicators=indicators,
-        verdict=verdict,
-    )
+        return SandboxReport(
+            file_path=file_path,
+            sha256=sha256,
+            mode="windows_sandbox",
+            duration_seconds=round(duration, 2),
+            new_connections=new_conns,
+            suspicious_indicators=indicators,
+            verdict=verdict,
+            status="ok",
+        )
+    except Exception as e:
+        _log(f"[SANDBOX] Windows Sandbox detonation failed: {e}")
+        return SandboxReport(
+            file_path=file_path, sha256="", mode="windows_sandbox",
+            error=str(e), verdict="ERROR", status="unavailable",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +257,7 @@ def run_restricted(file_path: str, timeout: int = DETONATION_TIMEOUT) -> Sandbox
     except Exception as e:
         shutil.rmtree(work_dir, ignore_errors=True)
         return SandboxReport(file_path=file_path, sha256=sha256, mode="restricted",
-                             error=f"Copy failed: {e}", verdict="ERROR")
+                             error=f"Copy failed: {e}", verdict="ERROR", status="error")
 
     # Baseline snapshots
     pre_procs = _snapshot_processes()
@@ -235,8 +270,6 @@ def run_restricted(file_path: str, timeout: int = DETONATION_TIMEOUT) -> Sandbox
     except Exception:
         pass
 
-    new_procs = []
-    new_conns_list = []
     post_files = set()
     proc = None
     start = time.time()
@@ -262,7 +295,7 @@ def run_restricted(file_path: str, timeout: int = DETONATION_TIMEOUT) -> Sandbox
         _log(f"[SANDBOX] Detonation error: {e}")
         shutil.rmtree(work_dir, ignore_errors=True)
         return SandboxReport(file_path=file_path, sha256=sha256, mode="restricted",
-                             error=str(e), verdict="ERROR")
+                             error=str(e), verdict="ERROR", status="error")
     finally:
         # Kill any lingering child processes
         if proc and proc.poll() is None:
@@ -279,15 +312,15 @@ def run_restricted(file_path: str, timeout: int = DETONATION_TIMEOUT) -> Sandbox
 
     duration = time.time() - start
 
-    # Diff process list
+    # Diff process list + connections via the shared pure diff helper
     post_procs = _snapshot_processes()
-    for pid, name in post_procs.items():
-        if pid not in pre_procs:
-            new_procs.append(f"{name} (PID {pid})")
-
-    # Diff connections
     post_conns = _snapshot_connections()
-    new_conns_list = list(post_conns - pre_conns)
+    diff = diff_snapshots(
+        {"procs": pre_procs, "conns": pre_conns},
+        {"procs": post_procs, "conns": post_conns},
+    )
+    new_procs = [f"{name} (PID {pid})" for pid, name in diff["new_processes"].items()]
+    new_conns_list = list(diff["new_connections"])
 
     # Diff filesystem
     try:
@@ -332,6 +365,7 @@ def run_restricted(file_path: str, timeout: int = DETONATION_TIMEOUT) -> Sandbox
         new_connections=new_conns_list,
         suspicious_indicators=indicators,
         verdict=verdict,
+        status="ok",
     )
 
 
@@ -343,21 +377,34 @@ def detonate(file_path: str, timeout: int = DETONATION_TIMEOUT) -> SandboxReport
     """
     Run file in the best available sandbox and return a SandboxReport.
     Automatically picks Windows Sandbox > restricted subprocess.
+
+    Graceful degradation: any exception raised while picking or running a
+    sandbox (WSB absent on Home edition / no Hyper-V, a detonation error,
+    etc.) is caught here and turned into a status="unavailable" report
+    rather than propagating — callers can always rely on getting a report.
     """
-    if not os.path.isfile(file_path):
+    try:
+        if not os.path.isfile(file_path):
+            return SandboxReport(
+                file_path=file_path, sha256="",
+                mode="none", error="File not found", verdict="ERROR",
+                status="unavailable",
+            )
+
+        _log(f"[SANDBOX] Detonating: {file_path}")
+
+        if _is_wsb_available():
+            _log("[SANDBOX] Using Windows Sandbox (WSB)")
+            return run_in_windows_sandbox(file_path, timeout=timeout)
+        else:
+            _log("[SANDBOX] Windows Sandbox not available — using restricted subprocess")
+            return run_restricted(file_path, timeout=timeout)
+    except Exception as e:
+        _log(f"[SANDBOX] detonate() failed, degrading gracefully: {e}")
         return SandboxReport(
-            file_path=file_path, sha256="",
-            mode="none", error="File not found", verdict="ERROR"
+            file_path=file_path, sha256="", mode="none",
+            error=str(e), verdict="ERROR", status="unavailable",
         )
-
-    _log(f"[SANDBOX] Detonating: {file_path}")
-
-    if _is_wsb_available():
-        _log("[SANDBOX] Using Windows Sandbox (WSB)")
-        return run_in_windows_sandbox(file_path, timeout=timeout)
-    else:
-        _log("[SANDBOX] Windows Sandbox not available — using restricted subprocess")
-        return run_restricted(file_path, timeout=timeout)
 
 
 def detonate_async(
