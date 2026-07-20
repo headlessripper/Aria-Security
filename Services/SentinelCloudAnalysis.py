@@ -26,25 +26,36 @@ VT_BASE = "https://www.virustotal.com/api/v3"
 REQUEST_TIMEOUT = 30
 MAX_UPLOAD_SIZE = 32 * 1024 * 1024  # 32 MB VT free limit
 
-# Simple in-process rate limiter: 4 req/min
-_RATE_LOCK = threading.Lock()
-_REQUEST_TIMES: deque = deque(maxlen=4)
+# VirusTotal free tier: 4 requests/minute.
+RATE_LIMIT_MAX_CALLS = 4
+RATE_LIMIT_PER_SECONDS = 60
+
+# Sentinel so we can tell "api_key not passed" (→ load from config) apart
+# from "api_key explicitly passed as empty string" (→ stay keyless, used by
+# tests / graceful-degradation callers).
+_UNSET = object()
 
 
 def _log(msg: str):
     write_to_log(msg, CLOUD_LOG)
 
 
-def _rate_limit():
-    """Block until we're within 4 req/min."""
-    with _RATE_LOCK:
-        now = time.time()
-        if len(_REQUEST_TIMES) == 4:
-            oldest = _REQUEST_TIMES[0]
-            wait = 60 - (now - oldest)
-            if wait > 0:
-                time.sleep(wait + 0.1)
-        _REQUEST_TIMES.append(time.time())
+class RateLimiter:
+    """Pure sliding-window rate limiter. No I/O, no clock access — the
+    caller supplies `now` so this is trivially unit-testable."""
+
+    def __init__(self, max_calls: int, per_seconds: float):
+        self.max_calls = max_calls
+        self.per = per_seconds
+        self._calls: deque = deque()
+
+    def allow(self, now: float) -> bool:
+        while self._calls and self._calls[0] <= now - self.per:
+            self._calls.popleft()
+        if len(self._calls) >= self.max_calls:
+            return False
+        self._calls.append(now)
+        return True
 
 
 def _sha256(path: str) -> str:
@@ -83,6 +94,7 @@ class CloudVerdict:
         threat_names: list = None,
         permalink: str = "",
         error: str = "",
+        status: Optional[str] = None,
     ):
         self.sha256 = sha256
         self.found = found
@@ -94,6 +106,11 @@ class CloudVerdict:
         self.permalink = permalink
         self.error = error
         self.timestamp = datetime.now().isoformat()
+        if status is None:
+            # Back-compat auto-derivation for call sites that predate the
+            # `status` field: an explicit error wins, otherwise found/not-found.
+            status = "error" if error else ("ok" if found else "not_found")
+        self.status = status
 
     @property
     def is_threat(self) -> bool:
@@ -121,6 +138,7 @@ class CloudVerdict:
         return {
             "sha256": self.sha256,
             "found": self.found,
+            "status": self.status,
             "verdict": self.verdict_str,
             "malicious": self.malicious,
             "suspicious": self.suspicious,
@@ -156,17 +174,30 @@ class VirusTotalClient:
             ...
     """
 
-    def __init__(self, api_key: str = ""):
-        self._api_key = api_key or _load_api_key()
+    def __init__(self, api_key=_UNSET):
+        # `api_key` omitted entirely → load from config (legacy default
+        # behavior). `api_key=""` passed explicitly → stay keyless; this is
+        # how callers (and tests) force graceful no-key handling without
+        # touching the on-disk config.
+        if api_key is _UNSET:
+            self._api_key = _load_api_key()
+        else:
+            self._api_key = api_key or ""
         self._session = requests.Session()
         self._cache: Dict[str, CloudVerdict] = {}
         self._cache_ttl = timedelta(hours=24)
+        self._rate_limiter = RateLimiter(RATE_LIMIT_MAX_CALLS, RATE_LIMIT_PER_SECONDS)
 
     def _headers(self) -> Dict:
         return {"x-apikey": self._api_key, "Accept": "application/json"}
 
     def _is_configured(self) -> bool:
         return bool(self._api_key)
+
+    def _wait_for_rate_limit(self):
+        """Block (in short increments) until the RateLimiter permits a call."""
+        while not self._rate_limiter.allow(time.time()):
+            time.sleep(0.5)
 
     def _get_cached(self, sha256: str) -> Optional[CloudVerdict]:
         cached = self._cache.get(sha256)
@@ -186,14 +217,15 @@ class VirusTotalClient:
     def check_hash(self, sha256: str) -> CloudVerdict:
         """Look up a SHA256 hash in VirusTotal."""
         if not self._is_configured():
-            return CloudVerdict(sha256, found=False, error="No API key configured")
+            return CloudVerdict(sha256, found=False, error="No API key configured",
+                                 status="unavailable")
 
         cached = self._get_cached(sha256)
         if cached:
             _log(f"VT cache hit: {sha256[:16]}")
             return cached
 
-        _rate_limit()
+        self._wait_for_rate_limit()
         try:
             resp = self._session.get(
                 f"{VT_BASE}/files/{sha256}",
@@ -259,7 +291,7 @@ class VirusTotalClient:
             _log(f"VT upload skipped — file too large: {size} bytes")
             return None
 
-        _rate_limit()
+        self._wait_for_rate_limit()
         try:
             with open(file_path, 'rb') as f:
                 resp = self._session.post(
@@ -278,7 +310,7 @@ class VirusTotalClient:
 
     def get_analysis_result(self, analysis_id: str) -> Optional[CloudVerdict]:
         """Poll for analysis results from an upload."""
-        _rate_limit()
+        self._wait_for_rate_limit()
         try:
             resp = self._session.get(
                 f"{VT_BASE}/analyses/{analysis_id}",
@@ -344,11 +376,12 @@ class VirusTotalClient:
     def check_url(self, url: str) -> CloudVerdict:
         """Check a URL in VirusTotal."""
         if not self._is_configured():
-            return CloudVerdict("", found=False, error="No API key configured")
+            return CloudVerdict("", found=False, error="No API key configured",
+                                 status="unavailable")
 
         import base64
         url_id = base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
-        _rate_limit()
+        self._wait_for_rate_limit()
         try:
             resp = self._session.get(
                 f"{VT_BASE}/urls/{url_id}",
