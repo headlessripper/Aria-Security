@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import List
 
 _WHITELIST_PATH = "Config/sentinel_whitelist.json"
-_LOCK = threading.Lock()
 _INSTANCE: "SentinelWhitelist | None" = None
 
 
@@ -19,6 +18,14 @@ def norm_path(p: str) -> str:
     """Pure path normalizer: absolute + case-folded, so mixed-case/slash
     variants of the same path compare equal. Empty/falsy input -> ''."""
     return os.path.normcase(os.path.abspath(p)) if p else ""
+
+
+def _norm_dir(p: str) -> str:
+    """Normalized dir path guaranteed to end with os.sep (empty -> '')."""
+    n = norm_path(p)
+    if n and not n.endswith(os.sep):
+        n += os.sep
+    return n
 
 
 def get_whitelist() -> "SentinelWhitelist":
@@ -52,7 +59,7 @@ class SentinelWhitelist:
                 with self._path.open("r", encoding="utf-8") as f:
                     d = json.load(f)
                 self._files  = {norm_path(x) for x in d.get("files",  [])}
-                self._dirs   = [norm_path(x) for x in d.get("dirs",   [])]
+                self._dirs   = [_norm_dir(x) for x in d.get("dirs",   []) if x]
                 self._ips    = {x.strip() for x in d.get("ips",    [])}
                 self._hashes = {x.lower().strip() for x in d.get("hashes", [])}
         except Exception:
@@ -101,6 +108,8 @@ class SentinelWhitelist:
 
     def add_file(self, path: str) -> bool:
         n = norm_path(path)
+        if not n:
+            return False
         with self._lock:
             if n in self._files:
                 return False
@@ -109,9 +118,9 @@ class SentinelWhitelist:
             return True
 
     def add_dir(self, dir_path: str) -> bool:
-        n = norm_path(dir_path)
-        if n and not n.endswith(os.sep):
-            n += os.sep
+        n = _norm_dir(dir_path)
+        if not n:
+            return False
         with self._lock:
             if n in self._dirs:
                 return False
