@@ -18,8 +18,16 @@ _lock = threading.Lock()
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+    """Open a fresh connection against the CURRENT module-level _DB_PATH.
+
+    Reads the global on every call (not captured at import time) so tests
+    can monkeypatch ``SentinelScanHistory._DB_PATH`` and have it take
+    effect immediately. WAL mode + a busy timeout let the scanner (writer)
+    and the UI (reader) hit the db concurrently from different threads.
+    """
+    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
