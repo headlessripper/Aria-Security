@@ -2,7 +2,7 @@
 SentinelScheduler — persistent cron-style scan scheduler.
 
 Schedules are stored in ~/.AriaSecurity/schedules.json.
-A background QThread fires the appropriate scan at the right time.
+A background BaseService worker fires the appropriate scan at the right time.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-import threading
+from Services.framework.base_service import BaseService
 
 _SCHED_PATH = Path.home() / ".AriaSecurity" / "schedules.json"
 _SCHED_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -82,33 +82,52 @@ def update_last_run(sid: str, interval_hours: float):
     save_schedules(scheds)
 
 
+# ── Pure logic ─────────────────────────────────────────────────────────────────
+
+def due_schedules(schedules: list[dict], now: float) -> list[dict]:
+    """Return the schedules that are enabled and whose next_run has passed. Pure; no I/O."""
+    out = []
+    for s in schedules or []:
+        try:
+            if s.get("enabled", True) and float(s.get("next_run", float("inf"))) <= now:
+                out.append(s)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 # ── Background runner ─────────────────────────────────────────────────────────
 
-class SchedulerThread(threading.Thread):
-    """Polls schedules every 60 s and calls on_scan_due(schedule_id, scan_path) when one fires."""
+class Scheduler(BaseService):
+    """Polls schedules and calls on_scan_due(schedule_id, scan_path) when one fires."""
 
-    def __init__(self, on_scan_due: Callable[[str, str], None] | None = None):
-        super().__init__(daemon=True, name="SentinelScheduler")
-        self._running = True
-        self._on_due  = on_scan_due or (lambda sid, path: None)
+    name = "Scheduler"
 
-    def stop(self):
-        self._running = False
+    def __init__(self, config: dict | None = None, brain=None,
+                 on_scan_due: Callable[[str, str], None] | None = None):
+        cfg = {"check_interval": 60.0}
+        cfg.update(config or {})
+        super().__init__(cfg, brain)
+        self._on_scan_due = on_scan_due
 
-    def run(self):
-        while self._running:
+    def _fire(self, sched: dict):
+        sid = sched.get("id")
+        path = sched.get("scan_path") or sched.get("path")
+        if self._on_scan_due:
+            self._on_scan_due(sid, path)
+        update_last_run(sid, float(sched.get("interval_hours", 24)))
+
+    def _run(self):
+        self._heartbeat()
+        while not self._stopping():
             try:
-                now = time.time()
-                for sched in load_schedules():
-                    if not sched.get("enabled", True):
-                        continue
-                    if now >= sched.get("next_run", 0):
-                        self._on_due(sched["id"], sched["scan_path"])
-                        update_last_run(sched["id"], sched["interval_hours"])
-            except Exception:
-                pass
-            # Sleep in 1-second ticks so stop() is noticed quickly
-            for _ in range(60):
-                if not self._running:
-                    return
-                time.sleep(1)
+                for sched in due_schedules(load_schedules(), time.time()):
+                    try:
+                        self._fire(sched)
+                    except Exception as e:
+                        self._log(f"schedule fire error: {e}", "ERROR")
+            except Exception as e:
+                self._log(f"scheduler tick error: {e}", "ERROR")
+            self._heartbeat()
+            if not self._sleep(self.config.get("check_interval", 60.0)):
+                break
