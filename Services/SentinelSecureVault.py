@@ -31,6 +31,11 @@ VAULT_DIR.mkdir(parents=True, exist_ok=True)
 META_FILE = VAULT_DIR / "vault_meta.json"
 
 
+class VaultError(Exception):
+    """Raised for vault operations that fail cleanly (e.g. wrong password)."""
+    pass
+
+
 # ── Key derivation ────────────────────────────────────────────────────────────
 
 def _derive_key(password: str, salt: bytes) -> bytes:
@@ -45,17 +50,24 @@ def _derive_key(password: str, salt: bytes) -> bytes:
 
 # ── Metadata helpers ──────────────────────────────────────────────────────────
 
+def _meta_file() -> Path:
+    # Recomputed from the current VAULT_DIR (not the import-time constant) so
+    # tests can monkeypatch VAULT_DIR and get full isolation from the real vault.
+    return VAULT_DIR / "vault_meta.json"
+
+
 def _load_meta() -> dict:
     try:
-        if META_FILE.exists():
-            return json.loads(META_FILE.read_text())
+        meta_file = _meta_file()
+        if meta_file.exists():
+            return json.loads(meta_file.read_text())
     except Exception:
         pass
     return {}
 
 
 def _save_meta(meta: dict):
-    META_FILE.write_text(json.dumps(meta, indent=2))
+    _meta_file().write_text(json.dumps(meta, indent=2))
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -76,8 +88,18 @@ def add(src_path: str, password: str, delete_original: bool = True) -> str:
     fernet    = Fernet(vault_key)
 
     enc_data = fernet.encrypt(src.read_bytes())
-    (entry_dir / "data.enc").write_bytes(enc_data)
-    (entry_dir / "salt.bin").write_bytes(salt)
+
+    data_path = entry_dir / "data.enc"
+    salt_path = entry_dir / "salt.bin"
+    data_tmp  = entry_dir / "data.enc.tmp"
+    salt_tmp  = entry_dir / "salt.bin.tmp"
+
+    # Write to temp paths first, then atomically replace into place so a
+    # crash mid-write can never leave a partially-written vault entry.
+    data_tmp.write_bytes(enc_data)
+    salt_tmp.write_bytes(salt)
+    os.replace(str(data_tmp), str(data_path))
+    os.replace(str(salt_tmp), str(salt_path))
 
     meta = _load_meta()
     meta[vault_id] = {
@@ -89,6 +111,7 @@ def add(src_path: str, password: str, delete_original: bool = True) -> str:
     }
     _save_meta(meta)
 
+    # Only remove the original file after the atomic replace succeeded.
     if delete_original:
         src.unlink(missing_ok=True)
 
@@ -101,17 +124,23 @@ def extract(vault_id: str, dst_dir: str, password: str) -> str:
     if not entry_dir.exists():
         raise FileNotFoundError(f"Vault entry {vault_id} not found")
 
-    salt      = (entry_dir / "salt.bin").read_bytes()
-    vault_key = _derive_key(password, salt)
-    fernet    = Fernet(vault_key)
+    try:
+        salt = (entry_dir / "salt.bin").read_bytes()
+    except OSError as exc:
+        raise VaultError("wrong password or corrupt vault entry") from exc
 
     try:
-        plain = fernet.decrypt((entry_dir / "data.enc").read_bytes())
-    except InvalidToken:
-        raise ValueError("Wrong password or corrupted vault entry")
+        vault_key = _derive_key(password, salt)
+        fernet    = Fernet(vault_key)
+        plain     = fernet.decrypt((entry_dir / "data.enc").read_bytes())
+    except InvalidToken as exc:
+        raise VaultError("wrong password or corrupt vault entry") from exc
+    except OSError as exc:
+        raise VaultError("wrong password or corrupt vault entry") from exc
 
     meta     = _load_meta()
     orig_name = meta.get(vault_id, {}).get("orig_name", vault_id)
+    Path(dst_dir).mkdir(parents=True, exist_ok=True)
     dst_path  = Path(dst_dir) / orig_name
     dst_path.write_bytes(plain)
     return str(dst_path)
