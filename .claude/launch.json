@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "sentinel-flask",
-      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeExecutable": "D:/ZashironSentinel/.venv/Scripts/python.exe",
       "runtimeArgs": ["run_dev.py", "8765"],
       "port": 8765
     }
