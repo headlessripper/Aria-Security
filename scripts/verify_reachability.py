@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENTRY = ROOT / "SentinelUI_Flask.py"
-EXPECTED_LIVE = 37
+EXPECTED_LIVE = 39
 
 def index():
     by_dotted, by_stem = {}, {}

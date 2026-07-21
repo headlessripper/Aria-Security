@@ -163,6 +163,11 @@ class _AppState:
 
 _state = _AppState()
 
+# ── Argus (AI Copilot) ─────────────────────────────────────────────────────────
+from Argus import get_argus
+from Argus import tools as _argus_tools
+_argus_tools.set_scanner_provider(lambda: _state.get_service())
+
 # ── Brain → Socket.IO bridge ──────────────────────────────────────────────────
 def _on_brain_threat(event: ThreatEvent):
     try:
@@ -1536,46 +1541,30 @@ def api_yara_rule_delete(name):
 # Argus (AI Copilot)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_ARIA_HISTORY: list = []
-
 @app.route("/api/aria/chat", methods=["POST"])
 def api_aria_chat():
     msg = (request.json or {}).get("message", "")
     if not msg:
         return jsonify({"error": "empty message"}), 400
-    _ARIA_HISTORY.append({"role": "user", "content": msg})
 
     def _respond():
-        reply = None
-        # Primary: AVBrain's Argus copilot, backed by the downloaded GGUF model.
         try:
-            from Services.AVBrain import get_avbrain
-            av = get_avbrain()
-            if av.is_llm_available():
-                reply = av.chat(msg)
+            reply = get_argus().chat(msg)
         except Exception as exc:
-            print(f"[Argus] AVBrain chat unavailable: {exc}")
-        # Fallback: deterministic status summary when no model is loaded.
-        if not reply:
-            snap  = _state.snapshot()
-            tc    = snap["threat_counts"]
-            total = sum(tc.values())
-            reply = (
-                f"AriaSecurity is {'active' if snap['monitoring'] else 'inactive'}. "
-                f"Protection level: {snap['protection_level']}%. "
-                f"Total threats detected: {total}. "
-                "AI model not loaded — open AI Copilot and click "
-                "“Download Model” to enable full Argus reasoning."
-            )
-        _ARIA_HISTORY.append({"role": "assistant", "content": reply})
+            reply = f"⚠ Argus error: {exc}"
         socketio.emit("aria_reply", {"reply": reply})
 
-    threading.Thread(target=_respond, daemon=True).start()
+    threading.Thread(target=_respond, daemon=True, name="ArgusChat").start()
     return jsonify({"status": "processing"})
 
 @app.route("/api/aria/history")
 def api_aria_history():
-    return jsonify(_ARIA_HISTORY[-40:])
+    return jsonify(get_argus().history.recent(40))
+
+@app.route("/api/aria/clear", methods=["POST"])
+def api_aria_clear():
+    get_argus().clear()
+    return jsonify({"status": "cleared"})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SETTINGS
