@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENTRY = ROOT / "SentinelUI_Flask.py"
-EXPECTED_LIVE = 31
+EXPECTED_LIVE = 37
 
 def index():
     by_dotted, by_stem = {}, {}
@@ -46,13 +46,22 @@ def walk(by_dotted, by_stem):
         except Exception:
             continue
         for node in ast.walk(tree):
-            names = []
+            names = []          # resolved via fuzzy resolve()
+            exact = []          # resolved by exact dotted path only
             if isinstance(node, ast.Import):
                 names = [a.name for a in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = [node.module]
+                # `from pkg import submodule` — treat pkg.submodule as a module
+                # import too, but only count an EXACT dotted-path file match so a
+                # `from pkg import ClassName` never fuzzy-matches an unrelated file.
+                exact = [node.module + "." + a.name for a in node.names]
             for n in names:
                 t = resolve(n, path, by_dotted, by_stem)
+                if t and ROOT in t.parents:
+                    stack.append(t)
+            for n in exact:
+                t = by_dotted.get(n)
                 if t and ROOT in t.parents:
                     stack.append(t)
     return visited
