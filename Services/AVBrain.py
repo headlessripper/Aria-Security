@@ -30,14 +30,13 @@ llama-cpp-python install:
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional
 
 # ---------------------------------------------------------------------------
 # Optional heavy imports
@@ -67,14 +66,6 @@ from Interface.write_to_log import write_to_log
 
 _LOG = "logs/AVBrain.log"
 _MODEL_DIR = Path.home() / ".AriaSecurity" / "avbrain"
-
-# Argus personality files — editable by the user
-_ARIA_DIR   = Path("Argus")
-_SOUL_FILE  = _ARIA_DIR / "soul.md"
-_MIND_FILE  = _ARIA_DIR / "mind.md"
-
-# Agentic tool-call pattern emitted by the LLM: [TOOL:name:optional_arg]
-_TOOL_RE = re.compile(r"\[TOOL:(\w+)(?::([^\]]*))?\]")
 
 N_CTX            = 8192   # LLM context window (Phi-3.5 supports up to 128k)
 MAX_PROMPT_TOK   = 6000   # safety budget for the assembled prompt (leaves room for reply)
@@ -445,13 +436,6 @@ class AVBrain:
 
         self._last_assessment: Optional[AVAssessment] = None
 
-        # Argus chat state
-        self._soul: str = ""
-        self._mind: str = ""
-        self._chat_history: List[Tuple[str, str]] = []   # [(user, aria), ...]
-        self._chat_lock = threading.Lock()
-        self._load_aria_prompts()
-
         # IF feature window state
         self._win_start  = time.time()
         self._win_counts = self._blank_counts()
@@ -687,6 +671,16 @@ class AVBrain:
         """True when a GGUF model is loaded and ready for inference."""
         return bool(self._llm and self._llm.available)
 
+    def llm_chat(self, system: str, history: list, user_msg: str):
+        """Shared access to the single loaded LLM for the Argus assistant.
+        Returns None when no model is loaded (Argus then falls back)."""
+        if not self._llm or not getattr(self._llm, "available", False):
+            return None
+        try:
+            return self._llm.chat(system, history, user_msg)
+        except Exception:
+            return None
+
     def reload_model(self) -> bool:
         """
         (Re)load the GGUF model from disk after a download completes — lets the
@@ -801,182 +795,6 @@ class AVBrain:
                         rec.status      = "resolved"
                         rec.resolved_at = now
                         rec.action_taken = "auto-expired (timeout)"
-
-    # ------------------------------------------------------------------
-    # Argus personality loading
-    # ------------------------------------------------------------------
-
-    def _load_aria_prompts(self):
-        """Load soul.md and mind.md from the Argus directory."""
-        for attr, path in (("_soul", _SOUL_FILE), ("_mind", _MIND_FILE)):
-            try:
-                setattr(self, attr, path.read_text(encoding="utf-8", errors="ignore"))
-            except Exception:
-                setattr(self, attr, "")
-        if self._soul or self._mind:
-            write_to_log("Argus prompts loaded (soul + mind)", _LOG)
-
-    def reload_aria_prompts(self):
-        """Hot-reload soul.md / mind.md without restarting."""
-        self._load_aria_prompts()
-
-    # ------------------------------------------------------------------
-    # Argus chat (agentic, called from CopilotPage worker thread)
-    # ------------------------------------------------------------------
-
-    def chat(self, user_message: str) -> str:
-        """
-        Main entry point for the Copilot UI.
-        Runs the LLM, parses any [TOOL:...] calls, executes them, then
-        runs a second LLM pass with the results to produce the final reply.
-
-        MUST be called from a background thread — LLM inference blocks.
-        """
-        if not self._llm or not self._llm.available:
-            return (
-                "⚠ AVBrain LLM is not loaded.\n"
-                "Download the Phi-3.5-mini model from **Settings → Plugins → Download AVBrain Model**."
-            )
-
-        system = self._build_aria_system()
-
-        with self._chat_lock:
-            history = list(self._chat_history)
-
-        # --- First LLM pass ---
-        raw = self._llm.chat(system, history, user_message)
-
-        # --- Parse and execute any tool calls ---
-        tool_calls = _TOOL_RE.findall(raw)
-        if tool_calls:
-            tool_results = []
-            clean_msg = _TOOL_RE.sub("", raw).strip()   # text without [TOOL:...] tags
-
-            for name, arg in tool_calls:
-                result = self._execute_tool(name, arg.strip())
-                tool_results.append(f"[{name}({arg})] → {result}")
-
-            # --- Second LLM pass: incorporate tool results ---
-            augmented_user = (
-                f"{user_message}\n\n"
-                f"[Tool results]\n" + "\n".join(tool_results)
-            )
-            final = self._llm.chat(system, history, augmented_user)
-        else:
-            final = raw
-
-        # Persist to chat history
-        with self._chat_lock:
-            self._chat_history.append((user_message, final))
-            if len(self._chat_history) > 20:    # rolling window — keep last 20 turns
-                self._chat_history = self._chat_history[-20:]
-
-        return final
-
-    def clear_chat_history(self):
-        with self._chat_lock:
-            self._chat_history.clear()
-
-    def _build_aria_system(self) -> str:
-        """Combine soul + mind + live security context into the system prompt."""
-        soul_block = f"# Personality\n{self._soul}\n\n" if self._soul else ""
-        mind_block = f"# Knowledge Base\n{self._mind}\n\n" if self._mind else ""
-        ctx_block  = f"# Live System State\n{self._build_context()}"
-        return soul_block + mind_block + ctx_block
-
-    # ------------------------------------------------------------------
-    # Agentic tool dispatch
-    # ------------------------------------------------------------------
-
-    def _execute_tool(self, name: str, arg: str) -> str:
-        """Execute a tool by name, return a string result for the LLM."""
-        try:
-            brain = get_brain()
-
-            if name == "get_threats":
-                with self._t_lock:
-                    active = [r for r in self._threats.values() if r.status == "active"]
-                if not active:
-                    return "No active threats."
-                return "\n".join(
-                    f"[{r.id}] {r.event.severity.name} {r.event.category.name} — "
-                    f"{r.event.title} ({r.age():.0f}s ago)"
-                    for r in active[:10]
-                )
-
-            elif name == "get_modules":
-                modules = brain.get_module_statuses()
-                return "\n".join(
-                    f"{'✅' if m.running else '❌'} {m.name} — "
-                    f"events={m.event_count}, note={m.health_note}"
-                    for m in modules
-                )
-
-            elif name == "get_protection_level":
-                return f"Protection level: {self.get_protection_level()}%"
-
-            elif name == "get_recent_events":
-                try:
-                    n = int(arg) if arg else 10
-                except ValueError:
-                    n = 10
-                events = brain.get_recent_events(n)
-                if not events:
-                    return "No recent events."
-                return "\n".join(
-                    f"[{e.severity.name}][{e.category.name}] {e.title}: {e.detail}"
-                    for e in events
-                )
-
-            elif name == "get_stats":
-                counts  = brain.get_threat_counts()
-                blocked = brain.get_blocked_count()
-                total   = brain.get_total_threats()
-                lines   = [f"Total threats: {total}", f"IPs blocked: {blocked}"]
-                lines  += [f"  {cat}: {cnt}" for cat, cnt in counts.items() if cnt > 0]
-                return "\n".join(lines)
-
-            elif name == "block_ip":
-                ip = arg.strip()
-                if not ip:
-                    return "Error: no IP address provided."
-                brain.emit_block(ip, "Blocked by Argus (user request)")
-                return f"Firewall block applied to {ip} (both directions)."
-
-            elif name == "resolve_threat":
-                tid = arg.strip()
-                if not tid:
-                    return "Error: no threat ID provided."
-                self.resolve_threat(tid, action="Resolved via Argus")
-                return f"Threat {tid} marked as resolved."
-
-            elif name == "read_log":
-                log_map = {
-                    "psds":       "logs/psds.log",
-                    "ransom":     "logs/Ransom.log",
-                    "netpro":     "logs/NetPro.log",
-                    "exploit":    "logs/ExploitPro.log",
-                    "behavioral": "logs/Behavioral.log",
-                    "brain":      "logs/SentinelBrain.log",
-                    "avbrain":    "logs/AVBrain.log",
-                    "threatintel":"logs/ThreatIntel.log",
-                }
-                key  = arg.strip().lower()
-                path = log_map.get(key)
-                if not path:
-                    return f"Unknown log '{arg}'. Available: {', '.join(log_map)}"
-                try:
-                    text = Path(path).read_text(encoding="utf-8", errors="ignore")
-                    return text[-600:].strip() or "(empty)"
-                except Exception as e:
-                    return f"Could not read {path}: {e}"
-
-            else:
-                return f"Unknown tool: {name}"
-
-        except Exception as e:
-            write_to_log(f"Tool '{name}' error: {e}", _LOG)
-            return f"Tool error: {e}"
 
     # ------------------------------------------------------------------
     # Model finder
