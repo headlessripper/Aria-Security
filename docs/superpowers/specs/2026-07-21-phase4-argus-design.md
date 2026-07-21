@@ -62,8 +62,8 @@ Each tool carries `kind`. The orchestrator executes `kind=="read"` immediately a
 2. **Intent routing** (`parse_intent`):
    - **read** tool → run now; return the formatted result directly (deterministic — no LLM involved, so it works identically with or without the model).
    - **action** tool → set `_pending = (name, arg)`; return a confirmation prompt ("This will block 1.2.3.4 in the firewall. Confirm? (yes/no)").
-3. **No intent match:**
-   - **LLM available** → `avbrain.llm_chat(system, pairs, message)` where `system = soul + mind + context`. If the reply contains a validated tool call, route it through step 2's read/confirm logic (single, bounded second pass for read-tool results). Unknown/malformed tool tags are ignored (reply passed through).
+3. **No intent match** (the message is not a tool command):
+   - **LLM available** → `avbrain.llm_chat(system, pairs, message)` where `system = soul + mind + context`. The LLM path is **conversational only** — grounded free-form answer in Argus's voice. Tool execution is exclusively the deterministic intent layer (step 2, which runs first), so the LLM never needs to emit tool tags; this removes the brittle regex/second-pass machinery entirely.
    - **LLM unavailable** → a grounded deterministic reply: a one-line live-state summary (level, active-threat count, modules up) + "I can run these without the AI model: scan <path>, show threats, block <ip>, lookup <ip|hash>, read <log>. Download the AI model in Settings for full conversation."
 4. **Persist:** append `user` then `assistant` turn to the `ConversationStore`.
 
@@ -104,7 +104,7 @@ Keep the async fire-and-emit pattern (no streaming — that's Phase 5 UI territo
 - `history.ConversationStore` — append/recent/pairs/clear round-trip + atomic persist against a `tmp_path` file; single source (no duplicate).
 - `tools` — a read tool executes with a mocked brain/scanner and returns the expected string; an action tool's registration is `kind=="action"`; handler error → safe string; missing service → "unavailable".
 - `context.build_context` — mocked brain/avbrain → contains level + threat count + module states; asserts **no** "IsolationForest"/"anomaly" text.
-- `assistant.Argus.chat` — model-free path: read intent → executes tool; action intent → returns confirmation and does NOT execute; affirmative follow-up → executes pending; negative → cancels; no-model no-intent → grounded reply listing commands; LLM path with a mocked `llm_chat` → returns/narrates; a mocked LLM tool-call for an action → still requires confirm.
+- `assistant.Argus.chat` — model-free path: read intent → executes tool; action intent → returns confirmation and does NOT execute; affirmative follow-up → executes pending; negative → cancels; no-model no-intent → grounded reply listing commands; LLM path (no-intent message) with a mocked `llm_chat` → returns the conversational reply.
 - Flask: `/api/aria/history` and `/api/aria/clear` delegate to the store; `_ARIA_HISTORY` removed.
 
 ## 8. Verification
