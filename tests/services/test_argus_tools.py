@@ -37,11 +37,20 @@ def test_scan_file_no_scanner():
     assert "not available" in tools.run("scan_file", r"C:\x.exe").lower()
 
 
-def test_scan_file_with_scanner(monkeypatch):
+def test_scan_file_with_scanner(tmp_path):
+    f = tmp_path / "evil.exe"
+    f.write_text("x")
     svc = types.SimpleNamespace(scan_file=lambda p: {"verdict": "MALWARE", "reasons": ["yara:x"]})
     tools.set_scanner_provider(lambda: svc)
-    out = tools.run("scan_file", r"C:\evil.exe")
+    out = tools.run("scan_file", str(f))
     assert "MALWARE" in out
+
+
+def test_scan_file_missing_file(tmp_path):
+    svc = types.SimpleNamespace(scan_file=lambda p: {"verdict": "MALWARE"})
+    tools.set_scanner_provider(lambda: svc)
+    out = tools.run("scan_file", str(tmp_path / "nope.exe"))
+    assert "not found" in out.lower()
 
 
 def test_handler_exception_is_safe(monkeypatch):

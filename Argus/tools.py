@@ -99,6 +99,8 @@ def _h_scan_file(arg):
     if svc is None or not hasattr(svc, "scan_file"):
         return "Scanner not available (service not loaded)."
     path = arg.strip().strip('"')
+    if not Path(path).exists():
+        return f"File not found: {path}"
     result = svc.scan_file(path) or {}
     verdict = result.get("verdict", "UNKNOWN")
     reasons = ", ".join(result.get("reasons", [])[:3])
