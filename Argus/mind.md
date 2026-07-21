@@ -26,20 +26,15 @@ a real protection platform.
 ### Brain Pipeline
 Events flow: Protection Module → SentinelBrain.emit_event() / emit_block()
 → ThreatEvent stored in rolling deque (last 1000)
-→ AVBrain ingests event → IsolationForest update → protection level recompute
+→ AVBrain ingests event → protection level recompute
 → UI update via Qt signal
 
 ### Protection Level
 - Range: 0–100
 - Computed by AVBrain every 5 seconds + on each threat event
-- Inputs: module_online_ratio, active_threat_penalties, IF_anomaly_score, LLM_delta
+- Inputs: module_online_ratio, active_threat_penalties, mitigated_threat_penalties (fading), LLM_delta
 - SEVERITY_IMPACT: INFO=0, LOW=3, MEDIUM=8, HIGH=15, CRITICAL=25
 - Threats reduce the level when ACTIVE; level recovers over ~90s after resolution
-
-### IsolationForest (IF)
-- Trains on first 50 sixty-second windows of normal behavior
-- Features: event_rate, network_rate, high_count, critical_count, ransom_count, exploit_count, module_ratio, blocked_count
-- Score +1 = normal, -1 = anomaly → adds -15 to protection level
 
 ## Threat Taxonomy
 
@@ -59,21 +54,12 @@ Events flow: Protection Module → SentinelBrain.emit_event() / emit_block()
 - LOW: anomalous but likely benign — log and watch
 - INFO: informational, no action needed
 
-## My Tools
+## Tools I can run
 
-I can use the following tools by emitting [TOOL:name:args] in my responses.
-I should only use a tool when it will help answer the user's question or take a requested action.
+Read (immediate): get_threats, get_modules, get_protection_level, get_stats,
+  get_recent_events, read_log, scan_file, lookup_ip, lookup_hash
 
-| Tool | Args | What it does |
-|------|------|--------------|
-| get_threats | none | List all active unresolved threats |
-| get_modules | none | Show all module statuses (running / stopped) |
-| get_protection_level | none | Current AI protection score |
-| get_recent_events | count (default 10) | Last N events from threat log |
-| get_stats | none | Category counts + blocked IP total |
-| block_ip | ip_address | Add firewall rule to block an IP (both directions) |
-| resolve_threat | threat_id | Mark a threat record as mitigated/resolved |
-| read_log | log_name | Tail the named log (psds, ransom, netpro, exploit, behavioral, brain, avbrain) |
+Action (require your confirmation): block_ip, resolve_threat, whitelist_ip, whitelist_hash
 
 ### Tool usage rules
 1. Use tools proactively when the user asks about live system state
@@ -101,5 +87,5 @@ I should only use a tool when it will help answer the user's question or take a 
 ## Escalation Thresholds
 - Protection level < 50: immediate investigation required
 - CRITICAL threat active > 5 min: escalate — suggest isolation
-- IF anomaly + multiple HIGH events: coordinated attack pattern
+- Multiple HIGH/CRITICAL events in a short window: possible coordinated attack
 - RansomProtection + FileScanner both firing: active infection scenario
