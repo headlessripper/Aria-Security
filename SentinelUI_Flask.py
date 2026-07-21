@@ -1165,7 +1165,10 @@ def api_memory_scan():
                 socketio.emit("memory_scan_done", {"error": "Scanner unavailable", "results": []})
                 return
 
+            _counts = {"total": 0}
+
             def _on_progress(checked, total):
+                _counts["total"] = total
                 socketio.emit("memory_scan_progress", {"checked": checked, "total": total, "status": "scanning"})
 
             def _on_threat(row):
@@ -1179,7 +1182,7 @@ def api_memory_scan():
 
             results = mem_scan.scan_processes(scanner, on_progress=_on_progress, on_threat=_on_threat)
             socketio.emit("memory_scan_done",
-                          {"results": results, "threats": len(results), "status": "done"})
+                          {"results": results, "checked": _counts["total"], "threats": len(results), "status": "done"})
         except Exception as exc:
             socketio.emit("memory_scan_done", {"error": str(exc), "results": []})
         finally:
