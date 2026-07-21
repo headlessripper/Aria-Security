@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENTRY = ROOT / "SentinelUI_Flask.py"
-EXPECTED_LIVE = 39
+EXPECTED_LIVE = 45
 
 def index():
     by_dotted, by_stem = {}, {}
@@ -25,6 +25,12 @@ def resolve(name, from_file, by_dotted, by_stem):
         return None
     if name in by_dotted:
         return by_dotted[name]
+    # A bare package import (`from Argus import get_argus`, `import Argus`)
+    # resolves to that package's __init__.py, so the walk follows its
+    # re-exported submodules.
+    pkg_init = name + ".__init__"
+    if pkg_init in by_dotted:
+        return by_dotted[pkg_init]
     for dotted, path in by_dotted.items():
         if dotted.endswith("." + name):
             return path
