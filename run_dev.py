@@ -36,5 +36,12 @@ try:
 except Exception:
     pass
 
+# Dev convenience: pick up template edits without restarting the server.
+try:
+    _m.app.config["TEMPLATES_AUTO_RELOAD"] = True
+    _m.app.jinja_env.auto_reload = True
+except Exception:
+    pass
+
 print(f"[run_dev] serving Aria Security on http://127.0.0.1:{_port}", flush=True)
 _m._start_flask()
