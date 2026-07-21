@@ -34,6 +34,9 @@ class Argus:
         self._pending: Optional[Tuple[str, str]] = None
         self._soul = ""
         self._mind = ""
+        # Serializes chat/clear so the threaded /api/aria/chat route can't
+        # interleave two turns' _pending state or history writes.
+        self._lock = threading.Lock()
         self.reload_prompts()
 
     def reload_prompts(self) -> None:
@@ -44,8 +47,9 @@ class Argus:
                 setattr(self, attr, "")
 
     def clear(self) -> None:
-        self._pending = None
-        self.history.clear()
+        with self._lock:
+            self._pending = None
+            self.history.clear()
 
     def _system(self) -> str:
         soul = f"# Personality\n{self._soul}\n\n" if self._soul else ""
@@ -54,10 +58,11 @@ class Argus:
 
     def chat(self, message: str) -> str:
         message = (message or "").strip()
-        self.history.append("user", message)
-        reply = self._route(message)
-        self.history.append("assistant", reply)
-        return reply
+        with self._lock:
+            self.history.append("user", message)
+            reply = self._route(message)
+            self.history.append("assistant", reply)
+            return reply
 
     def _route(self, message: str) -> str:
         # 1) resolve a pending confirmation
