@@ -202,9 +202,9 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl th{text-align:left;padding:9px 11px;color:var(--dim);font-size:11px;
   font-weight:700;letter-spacing:.04em;border-bottom:1px solid var(--border);white-space:nowrap}
-.tbl td{padding:9px 11px;border-bottom:1px solid rgba(33,38,45,.5);vertical-align:middle}
+.tbl td{padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:middle}
 .tbl tr:last-child td{border-bottom:none}
-.tbl tr:hover td{background:rgba(255,255,255,.02)}
+.tbl tr:hover td{background:rgba(128,128,128,.10)}
 .feed-row{display:flex;align-items:center;gap:9px;padding:8px 3px;
   border-bottom:1px solid var(--border);font-size:13px}
 .feed-row:last-child{border-bottom:none}
@@ -2619,7 +2619,7 @@ async function loadConsole(){
       const lu=l.toUpperCase();
       const c=lu.includes('ERROR')||lu.includes('CRITICAL')||lu.includes('EXCEPTION')?'var(--red)'
              :lu.includes('WARN')?'var(--orange)'
-             :lu.includes('[AVBRAIN]')||lu.includes('[SENTINEL]')?'#79c0ff'
+             :lu.includes('[AVBRAIN]')||lu.includes('[SENTINEL]')?'var(--accent)'
              :'var(--green)';
       const safe=l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       return `<span style="color:${c}">${safe}</span>`;
@@ -2990,7 +2990,7 @@ async function loadNetScope(){
         <div style="display:flex;align-items:center;margin-bottom:8px">
           <div style="font-size:14px;font-weight:700;flex:1">${iface}</div>
           <span style="color:var(--accent);font-size:13px;margin-right:14px">↓ ${_nsFmt(inKb)}</span>
-          <span style="color:#f472b6;font-size:13px">↑ ${_nsFmt(outKb)}</span>
+          <span style="color:var(--dim);font-size:13px">↑ ${_nsFmt(outKb)}</span>
         </div>
         ${_nsSvg(st.history)}
         <div style="display:flex;gap:20px;margin-top:8px;font-size:12px;color:var(--dim)">
