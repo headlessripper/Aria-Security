@@ -948,6 +948,27 @@ def api_console_clear():
         return jsonify({"error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NATIVE FILE / FOLDER PICKER
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/pick", methods=["POST"])
+def api_pick():
+    """Open a native Windows picker and return the chosen path.
+
+    The WebView can't open one itself (and an <input type=file> never yields a
+    real path), so the dialog is opened on the host — same machine as the UI.
+    Body: {"mode": "file"|"folder", "title": str, "initial_dir": str}
+    """
+    d = request.json or {}
+    try:
+        from Services.native_dialogs import pick
+        res = pick(d.get("mode", "file"), d.get("title", ""), d.get("initial_dir", ""))
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"path": "", "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SENTINEL SENSE  (install footprint tracking + residual cleanup)
 # ══════════════════════════════════════════════════════════════════════════════
 

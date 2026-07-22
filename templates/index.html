@@ -560,6 +560,8 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
           <div id="wl-files-list" style="min-height:60px;max-height:340px;overflow-y:auto;margin-bottom:10px"></div>
           <div style="display:flex;gap:7px">
             <input class="inp" id="wl-file-inp" placeholder="File or dir path…" style="flex:1"/>
+            <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('wl-file-inp','file','Select a file')" title="Select a file"><span class="material-icons-round">folder_open</span>File</button>
+            <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('wl-file-inp','folder','Select a folder')" title="Select a folder"><span class="material-icons-round">folder_open</span>Folder</button>
             <button class="btn btn-green btn-sm" onclick="addWL('file')">Add</button>
             <button class="btn btn-ghost btn-sm" onclick="addWL('dir')" style="color:var(--dim)">Dir</button>
           </div>
@@ -635,7 +637,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       <div class="row">
         <div class="card col">
           <div class="sec-label">Encrypt &amp; Store File</div>
-          <input class="inp" id="vault-add-path" placeholder="Source file path…" style="margin-bottom:8px"/>
+          <div style="display:flex;gap:8px;margin-bottom:8px"><input class="inp" id="vault-add-path" placeholder="Source file path…" style="flex:1"/><button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('vault-add-path','file','Select a file to vault')" title="Select a file to vault"><span class="material-icons-round">folder_open</span>Browse</button></div>
           <input class="inp" id="vault-add-pwd" type="password"
             placeholder="Encryption password…" style="margin-bottom:11px"/>
           <button class="btn btn-primary btn-sm" id="vault-add-btn"
@@ -649,7 +651,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
           <input class="inp" id="vault-ext-id" placeholder="Vault ID (click row below)…" style="margin-bottom:8px" readonly/>
           <input class="inp" id="vault-ext-pwd" type="password"
             placeholder="Password…" style="margin-bottom:8px"/>
-          <input class="inp" id="vault-ext-dest" placeholder="Destination folder (blank = Downloads)…" style="margin-bottom:11px"/>
+          <div style="display:flex;gap:8px;margin-bottom:11px"><input class="inp" id="vault-ext-dest" placeholder="Destination folder (blank = Downloads)…" style="flex:1"/><button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('vault-ext-dest','folder','Select a destination folder')" title="Select a destination folder"><span class="material-icons-round">folder_open</span>Browse</button></div>
           <button class="btn btn-green btn-sm" id="vault-ext-btn"
             style="width:100%;justify-content:center">
             <span class="material-icons-round">lock_open</span>Decrypt &amp; Extract
@@ -677,6 +679,8 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
         <div class="sec-label">Add Schedule</div>
         <div style="display:flex;gap:9px;flex-wrap:wrap">
           <input class="inp" id="sched-path" placeholder="Scan path…" style="flex:2;min-width:180px"/>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('sched-path','folder','Select a folder to scan')" title="Select a folder to scan"><span class="material-icons-round">folder_open</span>Folder</button>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('sched-path','file','Select a file to scan')" title="Select a file to scan"><span class="material-icons-round">folder_open</span>File</button>
           <select class="inp" id="sched-interval" style="flex:1;min-width:130px">
             <option value="1">Every 1 hour</option>
             <option value="6">Every 6 hours</option>
@@ -1190,6 +1194,22 @@ function verdictColor(v) {
   if(v==='MALWARE')    return 'var(--red)';
   if(v==='SUSPICIOUS') return 'var(--orange)';
   return 'var(--dim)';
+}
+
+/* Open a native Windows file/folder picker and drop the result into `targetId`.
+   The WebView can't open one itself, so the host opens it and returns the path. */
+async function pickPath(targetId, mode, title){
+  const el = $(targetId); if(!el) return;
+  const btns = document.querySelectorAll(`[onclick*="pickPath('${targetId}'"]`);
+  btns.forEach(b => b.disabled = true);
+  try{
+    const d = await api('POST','/api/pick',
+      {mode, title, initial_dir: (el.value||'').trim()});
+    if(d.error){ toast(d.error,'error'); return; }
+    if(d.path){ el.value = d.path; el.dispatchEvent(new Event('input',{bubbles:true})); }
+    // a cancelled dialog returns an empty path — leave the field untouched
+  }catch(e){ toast('Picker failed: '+e.message,'error'); }
+  finally{ btns.forEach(b => b.disabled = false); }
 }
 
 /* HTML-escape for values interpolated into innerHTML (app names, file paths). */
