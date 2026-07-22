@@ -1,6 +1,6 @@
 {
   "feature_version": 2,
   "dim": 2381,
-  "synthetic": true,
-  "note": "smoke model \u2014 replace via Engine/Properties/train.py"
+  "synthetic": false,
+  "auc": 0.9975459451900526
 }
