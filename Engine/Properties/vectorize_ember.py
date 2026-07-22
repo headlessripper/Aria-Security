@@ -66,6 +66,7 @@ def main():
     ypath = out / f"y_{a.split}.dat"
     labels = []
     n = 0
+    skipped = 0
     t0 = time.time()
     with open(xpath, "wb") as xf:
         for fp in files:
@@ -73,7 +74,11 @@ def main():
                 for line in f:
                     if not line.strip():
                         continue
-                    raw = json.loads(line)
+                    try:
+                        raw = json.loads(line)  # tolerate a truncated/partial line
+                    except Exception:
+                        skipped += 1
+                        continue
                     y = int(raw.get("label", -1))
                     if a.labeled_only and y == -1:
                         continue
@@ -94,7 +99,7 @@ def main():
     np.array(labels, dtype=np.int8).tofile(ypath)
     dt = time.time() - t0
     print(f"[vectorize] DONE: {n} x {DIM} -> {xpath} ({xpath.stat().st_size/1048576:.0f} MB), "
-          f"labels -> {ypath}  in {dt:.0f}s", flush=True)
+          f"labels -> {ypath}  in {dt:.0f}s (skipped {skipped} unparseable lines)", flush=True)
     # label balance sanity
     ya = np.fromfile(ypath, dtype=np.int8)
     uniq, cnt = np.unique(ya, return_counts=True)
