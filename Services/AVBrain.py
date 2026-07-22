@@ -5,7 +5,7 @@ AVBrain — Central AI Intelligence for AriaSecurity
 Components:
   IFEngine       IsolationForest anomaly scorer  (real-time, every 60s window)
   LogReader      Tails engine log files for LLM context
-  LLMEngine      llama-cpp-python Phi-3.5-mini-instruct-Q4_K_M
+  LLMEngine      llama-cpp-python SecurityLLM-Q2_K
   ThreatTracker  Active / mitigated / resolved threat registry
   AVBrain        Orchestrator — owns the protection level number
 
@@ -16,7 +16,7 @@ Protection level dynamics
   LLM override: level_delta ∈ [-30, +10] applied on top of rule score
 
 Model (auto-detected, download separately):
-  Phi-3.5-mini-instruct-Q4_K_M.gguf (~2.2 GB)
+  SecurityLLM-Q2_K.gguf (~2.5 GB)
   Stored in: ~/.AriaSecurity/avbrain/
   GPU: n_gpu_layers=-1  (full VRAM offload — NVIDIA/AMD)
   CPU: n_gpu_layers=0   (fallback, ~3-6 tok/s on modern CPU)
@@ -67,7 +67,7 @@ from Interface.write_to_log import write_to_log
 _LOG = "logs/AVBrain.log"
 _MODEL_DIR = Path.home() / ".AriaSecurity" / "avbrain"
 
-N_CTX            = 8192   # LLM context window (Phi-3.5 supports up to 128k)
+N_CTX            = 8192   # LLM context window (SecurityLLM-Q2_K supports up to 128k)
 MAX_PROMPT_TOK   = 6000   # safety budget for the assembled prompt (leaves room for reply)
 IF_WINDOW_SECS   = 60     # feature aggregation window (seconds)
 IF_TRAIN_MIN     = 50     # minimum samples before IF switches to predict mode
@@ -103,12 +103,24 @@ class ThreatRecord:
     created_at: float = field(default_factory=time.time)
     resolved_at: Optional[float] = None
     action_taken: Optional[str] = None
+    # True when a real countermeasure was applied (firewall rule added, file
+    # quarantined, threat resolved by an engine) — as opposed to a threat that
+    # merely stopped being observed.
+    countered: bool = False
 
     def age(self) -> float:
         return time.time() - self.created_at
 
     def recovery_fraction(self) -> float:
-        """0.0 → 1.0 over RECOVERY_SECS after resolution / mitigation."""
+        """0.0 → 1.0 — how much of this threat's penalty has been recovered.
+
+        A countered threat recovers IMMEDIATELY: once the connection is
+        firewalled or the file is quarantined the danger is gone, so continuing
+        to suppress the protection level for RECOVERY_SECS just makes the score
+        lie. Threats that were only mitigated//unobserved still fade gradually.
+        """
+        if self.countered:
+            return 1.0
         if self.resolved_at is None:
             return 0.0
         return min(1.0, (time.time() - self.resolved_at) / RECOVERY_SECS)
@@ -232,7 +244,7 @@ class LLMEngine:
     """
     llama-cpp-python wrapper.
     Tries full GPU offload first, falls back to CPU automatically.
-    Produces structured JSON assessments using Phi-3.5-mini chat format.
+    Produces structured JSON assessments using SecurityLLM-Q2_K chat format.
     """
 
     _SYSTEM = (
@@ -257,7 +269,7 @@ class LLMEngine:
         if not _LLAMA_AVAILABLE:
             write_to_log("llama-cpp-python not installed — LLM disabled", _LOG)
             return
-        # Phi-3.5-mini supports up to 128k context. 2048 was far too small — Argus's
+        # SecurityLLM-Q2_K supports up to 128k context. 2048 was far too small — Argus's
         # system prompt (soul + mind + live state) alone can exceed it. Use 8192,
         # which comfortably fits the prompt while staying light on VRAM/RAM.
         # Try GPU offload first, then CPU.
@@ -332,7 +344,7 @@ class LLMEngine:
             return "LLM model not loaded. Download the AVBrain model from Settings → Plugins."
         with self._lock:
             try:
-                # Phi-3.5-mini chat template
+                # SecurityLLM-Q2_K chat template
                 prompt = f"<|system|>\n{system}<|end|>\n"
                 for u, a in history[-4:]:   # keep last 4 turns in context
                     prompt += f"<|user|>\n{u}<|end|>\n<|assistant|>\n{a}<|end|>\n"
@@ -514,6 +526,7 @@ class AVBrain:
             level_impact= impact,
             resolved_at = resolved_at,
             action_taken= "firewall block applied" if is_block else None,
+            countered   = is_block,
         )
         with self._t_lock:
             self._threats[tid] = rec
@@ -535,6 +548,7 @@ class AVBrain:
                 rec.status      = "mitigated"
                 rec.resolved_at = time.time()
                 rec.action_taken = action
+                rec.countered   = True   # action taken -> recover now
         self._recompute()
 
     # ------------------------------------------------------------------

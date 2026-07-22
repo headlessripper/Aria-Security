@@ -96,6 +96,7 @@ class NetworkProtection(BaseService):
         self.store = get_intel_store()
         self._blocked_ips: set = set()          # IPs we've already firewalled
         self._alerted_ips: set = set()          # IPs we've already alerted on
+        self._block_alerted: set = set()        # IPs we've already reported a block for
         self._lookup_pending: set = set()        # IPs with an in-flight AbuseIPDB lookup
         self._lookup_lock = threading.Lock()
         self._abuse_key_cached = None            # None = not yet loaded
@@ -103,6 +104,7 @@ class NetworkProtection(BaseService):
         # Rolling window of (timestamp, ip) for the connection-velocity heuristic.
         self._recent_ips = deque()
         self._velocity_alerted_until = 0.0
+        self._wl_version = -1                    # forces a sync on first poll
 
     # ------------------------------------------------------------------ #
     # AbuseIPDB key loading (salvaged from the previous implementation).
@@ -218,6 +220,7 @@ class NetworkProtection(BaseService):
             return []
 
     def _poll_once(self) -> None:
+        self._sync_whitelist()      # pick up whitelist edits without a restart
         conns = self._snapshot_connections()
         seen_this_cycle: set = set()
         now = time.time()
@@ -256,6 +259,23 @@ class NetworkProtection(BaseService):
 
         self._velocity_check(now)
 
+    def _sync_whitelist(self) -> None:
+        """Pull the live whitelist into the config the classifier reads.
+
+        The IP whitelist used to be a snapshot taken at construction, so
+        whitelisting an IP had no effect until the app restarted. Syncing
+        on the singleton's version counter keeps classify_connection pure
+        while making edits take effect on the next poll.
+        """
+        try:
+            from Services.SentinelWhitelist import get_whitelist
+            wl = get_whitelist()
+            if wl.version != self._wl_version:
+                self.config["whitelist"] = set(wl.list_ips())
+                self._wl_version = wl.version
+        except Exception:
+            pass
+
     def _handle_conn(self, conn: dict, now: float) -> None:
         ip = conn["raddr_ip"]
 
@@ -270,12 +290,19 @@ class NetworkProtection(BaseService):
         if action == "block":
             if self.config.get("action", "auto") == "auto":
                 self._firewall_block(ip)
-            self.emit_threat(
-                ThreatCategory.NETWORK, severity,
-                "Malicious connection blocked", reason,
-                ip_address=ip, pid=conn.get("pid"),
-                extra={"raddr_port": conn.get("raddr_port"), "status": conn.get("status")},
-            )
+            # Emit ONCE per IP. A firewall rule doesn't tear down the connection
+            # that is already open, so the same connection keeps re-classifying
+            # as "block" on every poll — without this gate one incident produced
+            # an event every few seconds forever, flooding the feed and driving
+            # the protection level to zero. Mirrors the "alert" branch below.
+            if ip not in self._block_alerted:
+                self._block_alerted.add(ip)
+                self.emit_threat(
+                    ThreatCategory.NETWORK, severity,
+                    "Malicious connection blocked", reason,
+                    ip_address=ip, pid=conn.get("pid"),
+                    extra={"raddr_port": conn.get("raddr_port"), "status": conn.get("status")},
+                )
         elif action == "alert":
             if ip not in self._alerted_ips:
                 self._alerted_ips.add(ip)
@@ -332,6 +359,7 @@ class NetworkProtection(BaseService):
                 except Exception:
                     continue
             self._blocked_ips.clear()
+            self._block_alerted.clear()   # rules gone -> allow re-reporting
         except Exception as e:
             self._log(f"teardown firewall cleanup error: {e}", "ERROR")
 

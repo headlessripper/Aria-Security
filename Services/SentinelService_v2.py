@@ -414,12 +414,25 @@ class SentinelWorker:
             self.scanning_complete.emit(len(detections))
             if detections:
                 brain = get_brain()
-                for threat_path in detections:
+                for det in detections:
+                    # `det` is a scan result dict carrying the verdict + path.
+                    # Severity follows the verdict instead of flagging everything
+                    # HIGH/"Malware detected"; benign verdicts never reach here.
+                    if isinstance(det, dict):
+                        verdict = str(det.get("verdict", "SUSPICIOUS")).upper()
+                        path = det.get("file") or ""
+                        reasons = ", ".join(det.get("reasons", [])[:3])
+                    else:                                   # legacy: bare path
+                        verdict, path, reasons = "SUSPICIOUS", str(det), ""
+                    if verdict in ("CLEAN", "IGNORED", "WHITELISTED"):
+                        continue                            # defence in depth
+                    confirmed = verdict == "MALWARE"
                     brain.emit_event(ThreatEvent(
-                        category=ThreatCategory.MALWARE, severity=ThreatSeverity.HIGH,
-                        title="Malware detected",
-                        detail=f"Threat found during directory scan: {threat_path}",
-                        source_module="FileScanner", file_path=str(threat_path),
+                        category=ThreatCategory.MALWARE,
+                        severity=ThreatSeverity.HIGH if confirmed else ThreatSeverity.MEDIUM,
+                        title="Malware detected" if confirmed else "Suspicious file",
+                        detail=(f"{verdict} — {path}" + (f" ({reasons})" if reasons else "")),
+                        source_module="FileScanner", file_path=path,
                     ))
         except Exception as e:
             print(f"Async scan error: {e}")
