@@ -41,7 +41,7 @@ set "LIBK=%KITROOT%\Lib\%WDKVER%\km\x64"
 rem --- compile (kernel mode) ---
 echo [build] compiling AriaFilter.c ...
 cl /nologo /c /Zi /W4 /WX- /Od /GS- /kernel ^
-   /D_AMD64_ /DAMD64 /D_WIN64 /D_KERNEL_MODE /DNTDDI_VERSION=0x0A000000 ^
+   /D_AMD64_ /DAMD64 /D_WIN64 /DNTDDI_VERSION=0x0A000000 ^
    /I"%INC%\km" /I"%INC%\shared" /I"%INC%\km\crt" /I"%INC%\um" ^
    AriaFilter.c
 if errorlevel 1 ( echo [build] COMPILE FAILED & exit /b 1 )

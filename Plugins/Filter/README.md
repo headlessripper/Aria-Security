@@ -102,6 +102,11 @@ bcdedit /set testsigning off   :: then reboot
   altitude allocated by Microsoft (this uses dev altitude `320000`).
 - Single client connection; path-only protocol (the bridge re-reads + scans the
   file). No content streaming, no write/cleanup interception yet.
+- **Port synchronization is a known simplification:** `gClientPort` is used in
+  `AriaPostCreate` and closed in `AriaPortDisconnect` without a rundown lock, so a
+  bridge disconnect during an in-flight scan has a narrow use-after-free window. A
+  production hardening pass should guard the port with rundown protection /
+  reference counting before real-world use.
 - Not auto-launched by the Aria app and not wired into the reachability graph —
   it's a standalone plugin. Wiring kernel detections into `SentinelBrain` events
   and auto-starting the bridge are future work.

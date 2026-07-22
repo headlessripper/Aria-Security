@@ -26,6 +26,7 @@
 PFLT_FILTER gFilter      = NULL;
 PFLT_PORT   gServerPort  = NULL;
 PFLT_PORT   gClientPort  = NULL;
+HANDLE      gClientPid   = NULL;   // PID of the connected user-mode bridge
 
 //
 // Round-trip timeout for a verdict: 5 seconds, expressed as a negative
@@ -51,6 +52,12 @@ AriaPortConnect (
     UNREFERENCED_PARAMETER(SizeOfContext);
 
     gClientPort = ClientPort;
+    //
+    // Remember the bridge's PID so its own file reads (while scanning) are not
+    // re-scanned -- see AriaPostCreate. The connect callback runs in the
+    // context of the connecting user-mode process.
+    //
+    gClientPid = PsGetCurrentProcessId();
     if (ConnectionCookie) {
         *ConnectionCookie = NULL;
     }
@@ -66,6 +73,7 @@ AriaPortDisconnect (
 
     FltCloseClientPort(gFilter, &gClientPort);
     gClientPort = NULL;
+    gClientPid = NULL;
 }
 
 NTSTATUS
@@ -112,7 +120,6 @@ AriaPostCreate (
     ULONG chars;
     LARGE_INTEGER timeout;
 
-    UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
 
     //
@@ -129,10 +136,25 @@ AriaPostCreate (
         return FLT_POSTOP_FINISHED_PROCESSING;   // fail-open: no bridge connected
     }
     //
-    // Skip kernel-originated opens (including the bridge's own file reads while
-    // scanning) to avoid recursion and pointless work.
+    // Skip kernel-originated opens (paging, system components) -- pointless to
+    // scan and a recursion risk.
     //
     if (Data->RequestorMode == KernelMode) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+    //
+    // Skip opens issued by the user-mode bridge ITSELF while it scans a file.
+    // The bridge is a user-mode process, so its reads are RequestorMode==UserMode
+    // and would otherwise re-enter this callback and block the bridge thread that
+    // is mid-scan until the send timeout. Identify it by the PID that connected.
+    //
+    if (gClientPid != NULL && PsGetCurrentProcessId() == gClientPid) {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
+    //
+    // Only files are scanned -- skip directory opens.
+    //
+    if (FlagOn(Data->Iopb->Parameters.Create.Options, FILE_DIRECTORY_FILE)) {
         return FLT_POSTOP_FINISHED_PROCESSING;
     }
 
@@ -173,8 +195,12 @@ AriaPostCreate (
         replyLength == sizeof(reply) &&
         reply.SafeToOpen == 0) {
         //
-        // Positive detection: fail the open.
+        // Positive detection: cancel the (already-successful) open, then fail it.
+        // In post-create the create has succeeded and a FILE_OBJECT exists;
+        // FltCancelFileOpen tears it down so the open is reliably aborted -- just
+        // overwriting IoStatus is not sufficient. (Matches the WDK scanner sample.)
         //
+        FltCancelFileOpen(FltObjects->Instance, FltObjects->FileObject);
         Data->IoStatus.Status = STATUS_VIRUS_INFECTED;
         Data->IoStatus.Information = 0;
     }
