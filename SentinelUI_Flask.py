@@ -1711,6 +1711,8 @@ def on_ping(data):
 _PORT = 8765
 
 def _start_flask():
+    # NOTE: Flask-SocketIO already passes threaded=True to app.run() for
+    # async_mode="threading" — do not pass it here, it raises TypeError.
     socketio.run(app, host="127.0.0.1", port=_PORT, debug=False,
                  use_reloader=False, allow_unsafe_werkzeug=True)
 
