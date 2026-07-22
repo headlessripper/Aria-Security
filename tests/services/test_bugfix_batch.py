@@ -133,3 +133,22 @@ def test_netprotection_picks_up_whitelist_without_restart(fake_brain, monkeypatc
     wl.add_ip("8.8.8.8")            # user whitelists it while running
     svc._sync_whitelist()
     assert "8.8.8.8" in svc.config["whitelist"]
+
+
+def test_custom_path_instance_never_migrates_real_whitelist(tmp_path, monkeypatch):
+    """A whitelist opened on an explicit path must not touch the user's real file.
+
+    Regression: _migrate_legacy ran for every instance, so constructing
+    SentinelWhitelist(tmp_path/...) in a test copied the live
+    Config/sentinel_whitelist.json into the tmp dir and DELETED the original.
+    """
+    import Services.SentinelWhitelist as W
+
+    legacy = tmp_path / "Config" / "sentinel_whitelist.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"files":[],"dirs":[],"ips":["1.2.3.4"],"hashes":[]}',
+                      encoding="utf-8")
+    monkeypatch.setattr(W, "_LEGACY_PATH", legacy)
+
+    W.SentinelWhitelist(tmp_path / "explicit.json")     # custom path
+    assert legacy.exists(), "explicit-path instance must not consume the legacy file"

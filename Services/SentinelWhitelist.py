@@ -66,8 +66,16 @@ class SentinelWhitelist:
         return self._version
 
     def _migrate_legacy(self) -> None:
-        """One-time move of the old Config/sentinel_whitelist.json into ~/.AriaSecurity."""
+        """One-time move of the old Config/sentinel_whitelist.json into ~/.AriaSecurity.
+
+        ONLY for an instance using the default location. An instance opened on an
+        explicit path (tests, alternate profiles) must never touch the real user
+        file — doing so would migrate live data into, say, a pytest tmp dir and
+        delete the original.
+        """
         try:
+            if Path(self._path) != Path(_WHITELIST_PATH):
+                return
             if self._path.exists() or not _LEGACY_PATH.exists():
                 return
             self._path.parent.mkdir(parents=True, exist_ok=True)

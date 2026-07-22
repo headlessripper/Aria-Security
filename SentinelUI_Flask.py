@@ -517,7 +517,33 @@ def api_firewall_rules_unblock():
         )
         if r.returncode == 0 and "deleted" in r.stdout.lower():
             deleted += 1
-    return jsonify({"status": "unblocked", "ip": ip, "rules_deleted": deleted})
+
+    # Optionally trust the IP so the network engine stops re-blocking it. The
+    # whitelist is live (version-synced), so this takes effect on the next poll
+    # rather than needing a restart.
+    whitelisted = False
+    if (request.json or {}).get("whitelist"):
+        try:
+            from Services.SentinelWhitelist import get_whitelist
+            get_whitelist().add_ip(ip)
+            whitelisted = True
+        except Exception as e:
+            return jsonify({"status": "unblocked", "ip": ip,
+                            "rules_deleted": deleted,
+                            "whitelisted": False, "error": str(e)})
+        # Drop it from the engine's dedupe sets too, so if it is ever removed
+        # from the whitelist a fresh block can still be reported.
+        try:
+            net = getattr(_state.get_service(), "_net_thread", None)
+            net_svc = getattr(net, "_svc", None)
+            if net_svc is not None:
+                net_svc._block_alerted.discard(ip)
+                net_svc._blocked_ips.discard(ip)
+        except Exception:
+            pass
+
+    return jsonify({"status": "unblocked", "ip": ip,
+                    "rules_deleted": deleted, "whitelisted": whitelisted})
 
 def _fw_clear_prefix(prefix: str) -> tuple[int, list]:
     """Enumerate and delete all rules whose name starts with prefix."""
@@ -1317,6 +1343,21 @@ def api_storage():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/storage/recycle_bin")
+def api_recycle_bin_info():
+    try:
+        return jsonify(system_monitor.recycle_bin_info())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/storage/recycle_bin/empty", methods=["POST"])
+def api_recycle_bin_empty():
+    """Permanently empty the Recycle Bin (the UI confirms first)."""
+    try:
+        return jsonify(system_monitor.empty_recycle_bin())
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVICE CONTROL
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1404,11 +1445,11 @@ def _load_plugins() -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _AVB_MODEL_URL = (
-    "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF"
-    "/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
+    "https://huggingface.co/tensorblock/SecurityLLM-GGUF"
+    "/resolve/main/SecurityLLM-Q2_K.gguf?download=true"
 )
 _AVB_MODEL_DIR  = Path.home() / ".AriaSecurity" / "avbrain"
-_AVB_MODEL_FILE = _AVB_MODEL_DIR / "Sentinel_A1.gguf"
+_AVB_MODEL_FILE = _AVB_MODEL_DIR / "SecurityLLM-Q2_K.gguf"
 _AVB_DOWNLOAD   = {"active": False}
 
 @app.route("/api/avbrain/model/status")
