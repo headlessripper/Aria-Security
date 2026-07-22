@@ -5,7 +5,6 @@ import json
 import socket 
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
-from PySide6.QtGui import QColor
 from Interface.get_local_ip import get_local_ip
 
 APP_NAME = "Aria Security"  # Updated to match your AV branding
@@ -123,21 +122,18 @@ APP_NAME_WIDGET = "SentinelWidget"
 
 ICON_SIZE = 24  # center icon 24x24
 
-# Color scheme based on #3e3e3e and #000000
-COLOR_BG_GLASS = QColor("#3e3e3e")
-COLOR_BG_GLASS.setAlpha(210)
-COLOR_BG_HALO = QColor("#000000")
-COLOR_BG_HALO.setAlpha(120)
-COLOR_ACCENT = QColor("#000000")
-COLOR_BORDER = QColor("#000000")
-COLOR_SLICE = QColor("#000000")
-COLOR_SLICE.setAlpha(210)
-COLOR_SLICE_HOVER = QColor("#3e3e3e")
-COLOR_SLICE_HOVER.setAlpha(240)
-COLOR_SLICE_ACTIVE = QColor("#000000")
-COLOR_SLICE_ACTIVE.setAlpha(255)
-COLOR_SLICE_BORDER = QColor("#3e3e3e")
-COLOR_ICON = QColor("#ffffff")
+# Legacy colour scheme from the retired Qt UI. Kept as plain hex strings so this
+# module has NO Qt dependency: importing PySide6 here made Sys_Config fail to
+# import in the frozen build, which blanked every path constant below it.
+COLOR_BG_GLASS     = "#3e3e3e"
+COLOR_BG_HALO      = "#000000"
+COLOR_ACCENT       = "#000000"
+COLOR_BORDER       = "#000000"
+COLOR_SLICE        = "#000000"
+COLOR_SLICE_HOVER  = "#3e3e3e"
+COLOR_SLICE_ACTIVE = "#000000"
+COLOR_SLICE_BORDER = "#3e3e3e"
+COLOR_ICON         = "#ffffff"
 
 def is_pe_file(path):
     with open(path, 'rb') as f:
