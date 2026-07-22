@@ -7,40 +7,16 @@
 <!-- Vendored locally so the app works fully offline (no CDN dependency) -->
 <link href="/static/fonts/material-icons.css" rel="stylesheet"/>
 <script src="/static/socket.io.min.js"></script>
-<script>
-/* Swiss theme system — apply saved theme before first paint (no FOUC). */
-(function(){
-  var root=document.documentElement, KEY="aria-theme", saved="dark";
-  try{saved=localStorage.getItem(KEY)||"dark";}catch(e){}
-  root.dataset.theme=saved;
-  function syncIcon(){
-    var el=document.getElementById("theme-toggle-icon");
-    if(el) el.textContent=(root.dataset.theme==="light")?"dark_mode":"light_mode";
-  }
-  window.__toggleTheme=function(){
-    root.dataset.theme=(root.dataset.theme==="light")?"dark":"light";
-    try{localStorage.setItem(KEY,root.dataset.theme);}catch(e){}
-    syncIcon();
-  };
-  document.addEventListener("DOMContentLoaded",syncIcon);
-})();
-</script>
 <style>
 /* ══ TOKENS ═══════════════════════════════════════════════════════ */
 :root{
-  /* Swiss dark — true black, monochrome core, one blue accent, reserved status */
-  --bg:#000000;--surface:#0a0a0a;--card:#0f0f0f;--border:#262626;
-  --accent:#2b6bff;--green:#22c55e;--orange:#f59e0b;--red:#ef4444;
-  --purple:#8b5cf6;--text:#f5f5f5;--dim:#a3a3a3;--muted:#666666;
-  --sw:64px;
-  --font:"Helvetica Neue","Inter",Arial,system-ui,sans-serif;
-  --mono:"JetBrains Mono","Consolas","Menlo",monospace;
-}
-:root[data-theme="light"]{
-  /* Swiss light — true white */
+  /* Swiss light — true white. Single theme; the dark variant was removed. */
   --bg:#ffffff;--surface:#f5f5f5;--card:#ffffff;--border:#e0e0e0;
   --accent:#1a4fd6;--green:#16a34a;--orange:#d97706;--red:#dc2626;
   --purple:#7c3aed;--text:#0a0a0a;--dim:#525252;--muted:#a3a3a3;
+  --sw:64px;
+  --font:"Helvetica Neue","Inter",Arial,system-ui,sans-serif;
+  --mono:"JetBrains Mono","Consolas","Menlo",monospace;
 }
 /* ══ RESET ════════════════════════════════════════════════════════ */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -143,13 +119,6 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
   border:1px solid var(--accent);border-radius:0;
   padding:2px 8px;font-size:11px;font-weight:700;letter-spacing:.02em;
 }
-#theme-toggle{
-  width:30px;height:30px;border-radius:0;display:flex;align-items:center;
-  justify-content:center;background:transparent;color:var(--dim);
-  border:1px solid var(--border);transition:color .12s,border-color .12s;
-}
-#theme-toggle:hover{color:var(--text);border-color:var(--dim)}
-#theme-toggle .material-icons-round{font-size:16px}
 #status-dot{
   width:7px;height:7px;border-radius:50%;background:var(--muted);transition:background .3s;
 }
@@ -261,6 +230,12 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
 
   <button class="nav-btn active" data-page="dashboard" data-tip="Dashboard">
     <span class="material-icons-round">dashboard</span></button>
+  <button class="nav-btn" data-page="history" data-tip="Scan History">
+    <span class="material-icons-round">history</span></button>
+  <button class="nav-btn" data-page="firewall" data-tip="Firewall">
+    <span class="material-icons-round">local_fire_department</span></button>
+  <button class="nav-btn" data-page="action-center" data-tip="Action Center">
+    <span class="material-icons-round">warning</span></button>
   <button class="nav-btn" data-page="aria" data-tip="Argus Assistant">
     <span class="material-icons-round">smart_toy</span></button>
 
@@ -345,9 +320,6 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
     <div id="topbar-badge">v{{ version }}</div>
     <div id="status-dot"></div>
     <div id="status-text">Offline</div>
-    <button id="theme-toggle" title="Toggle theme" onclick="window.__toggleTheme()">
-      <span class="material-icons-round" id="theme-toggle-icon">light_mode</span>
-    </button>
   </div>
 
   <div id="pages">
