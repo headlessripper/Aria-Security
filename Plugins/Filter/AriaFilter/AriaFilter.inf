@@ -1,0 +1,72 @@
+;;;
+;;; AriaFilter.inf  --  install information for the Aria Security minifilter.
+;;;
+;;; Dev/test driver. Install with test-signing enabled; see ..\README.md.
+;;;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "AntiVirus"
+ClassGuid   = {b1d1a169-c54f-4379-81db-bee7d88d7454}
+Provider    = %ProviderName%
+DriverVer   =
+CatalogFile = AriaFilter.cat
+PnpLockdown = 1
+
+[SourceDisksNames]
+1 = %DiskId1%,,,
+
+[SourceDisksFiles]
+AriaFilter.sys = 1,,
+
+[DestinationDirs]
+DefaultDestDir          = 12            ; %windir%\system32\drivers
+AriaFilter.DriverFiles  = 12
+
+;;
+;; Default install
+;;
+
+[DefaultInstall.NTamd64]
+OptionDesc  = %ServiceDesc%
+CopyFiles   = AriaFilter.DriverFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService  = %ServiceName%,,AriaFilter.Service
+
+;;
+;; Service
+;;
+
+[AriaFilter.Service]
+DisplayName    = %ServiceName%
+Description    = %ServiceDesc%
+ServiceBinary  = %12%\AriaFilter.sys
+Dependencies   = FltMgr
+ServiceType    = 2                       ; FILE_SYSTEM_DRIVER
+StartType      = 3                       ; DEMAND_START
+ErrorControl   = 1                       ; NORMAL
+LoadOrderGroup = "FSFilter Anti-Virus"
+AddReg         = AriaFilter.AddRegistry
+
+[AriaFilter.AddRegistry]
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+[AriaFilter.DriverFiles]
+AriaFilter.sys
+
+;;
+;; Strings
+;;
+
+[Strings]
+ProviderName        = "Aria Security"
+ServiceName         = "AriaFilter"
+ServiceDesc         = "Aria Security On-Access Minifilter"
+DiskId1             = "Aria Security Minifilter Installation Disk"
+DefaultInstance     = "AriaFilter Instance"
+Instance1.Name      = "AriaFilter Instance"
+Instance1.Altitude  = "320000"
+Instance1.Flags     = 0x0                ; allow attach on all volumes

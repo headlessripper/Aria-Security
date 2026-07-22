@@ -1,0 +1,15 @@
+# Build outputs — never commit PE/driver binaries (the Aria scanner quarantines
+# PE bytes found inside .git pack objects).
+*.sys
+*.obj
+*.pdb
+*.lib
+*.exp
+*.cer
+*.cat
+*.ilk
+*.res
+build/
+x64/
+Debug/
+Release/
