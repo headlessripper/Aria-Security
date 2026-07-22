@@ -53,7 +53,13 @@ except Exception as _qe:
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+# Flask resolves template/static folders relative to this module, which does not
+# exist as a directory once frozen — point them at the bundled data root instead.
+from Interface.find_items import base_path as _base_path
+_ASSET_ROOT = _base_path()
+app = Flask(__name__,
+            template_folder=os.path.join(_ASSET_ROOT, "templates"),
+            static_folder=os.path.join(_ASSET_ROOT, "static"))
 app.config["SECRET_KEY"] = "sentinel-secret-0x1f4a"
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*",
                     logger=False, engineio_logger=False)

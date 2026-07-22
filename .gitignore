@@ -34,3 +34,9 @@ Engine/Signatures/*.ips
 
 # Subagent-driven-development scratch (progress ledger, briefs)
 .superpowers/
+
+# PyInstaller build outputs — never commit PE binaries (the Aria scanner
+# quarantines PE bytes found inside .git pack objects).
+/build/
+/dist/
+*.spec.bak
