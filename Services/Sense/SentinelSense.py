@@ -78,6 +78,7 @@ from pathlib import Path
 from Services.Sense.attribution import attribute, footprint_paths
 from Services.Sense.fs_journal import get_journal
 from Services.Sense.residuals import find_residuals
+from Config import paths as _paths
 from Services.Sense.sense_map import get_sense_map
 
 try:  # keep the pure core importable in isolation (e.g. non-Windows CI)
@@ -101,7 +102,7 @@ try:
 except Exception:  # pragma: no cover - defensive
     CertReputation = None  # type: ignore
 
-_ARIA_HOME = Path.home() / ".AriaSecurity"
+_ARIA_HOME = _paths.data_dir()
 _STATE_PATH = _ARIA_HOME / "sense_state.json"
 _SENSE_SINGLETON = None
 

@@ -36,9 +36,10 @@ from Config.Sys_Config import (
     IPS_FILE_PATH, WHITE_LIST_FILE_PATH,
 )
 from Interface.find_items import find_items
+from Config import paths as _paths
 
 INTEL_LOG = "logs/ThreatIntel.log"
-INTEL_CACHE_DIR = Path.home() / ".AriaSecurity" / "ThreatIntel"
+INTEL_CACHE_DIR = _paths.sub("ThreatIntel")
 INTEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 UPDATE_INTERVAL_HOURS = 4  # default refresh cadence when a feed doesn't override it

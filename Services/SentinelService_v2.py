@@ -13,6 +13,7 @@ import winreg
 from concurrent.futures import ThreadPoolExecutor
 
 from Services.SentinelBrain import get_brain, ThreatEvent, ThreatCategory, ThreatSeverity
+from Config import paths as _paths
 
 # Headless, Qt-free executor: terminates running threats, auto-quarantines, and
 # emits brain events. The old Qt `Executioner` needs a running QApplication event
@@ -125,7 +126,7 @@ warnings.filterwarnings("ignore", category=ResourceWarning)
 # Settings shim — replaces QSettings with a simple JSON file
 # ---------------------------------------------------------------------------
 
-_SETTINGS_PATH = Path.home() / ".AriaSecurity" / "settings.json"
+_SETTINGS_PATH = _paths.sub("settings.json")
 _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
 _SETTINGS_LOCK = threading.Lock()
 

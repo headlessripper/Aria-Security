@@ -6,13 +6,14 @@ import socket
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 from Interface.get_local_ip import get_local_ip
+from Config import paths as _paths
 
 APP_NAME = "Aria Security"  # Updated to match your AV branding
 COMPILER_VERSION = "SentinelCompiler_v5"
 VERSION = "1.0.4"
 DEVELOPER = "Samuel Ikenna Great"
 
-RANSOM_BASE_DIR = Path.home() / ".AriaSecurity" / "RansomProtect"
+RANSOM_BASE_DIR = _paths.sub("RansomProtect")
 
 
 # ----------------------------

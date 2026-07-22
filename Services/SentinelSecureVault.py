@@ -25,8 +25,9 @@ from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes as _hashes
+from Config import paths as _paths
 
-VAULT_DIR = Path.home() / ".AriaSecurity" / "SecureVault"
+VAULT_DIR = _paths.sub("SecureVault")
 VAULT_DIR.mkdir(parents=True, exist_ok=True)
 META_FILE = VAULT_DIR / "vault_meta.json"
 

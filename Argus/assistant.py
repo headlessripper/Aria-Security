@@ -10,8 +10,9 @@ from Argus import tools
 from Argus.intents import parse_intent
 from Argus.context import build_context
 from Argus.history import ConversationStore
+from Config import paths as _paths
 
-_DATA_DIR = Path.home() / ".AriaSecurity"
+_DATA_DIR = _paths.data_dir()
 _HISTORY_PATH = _DATA_DIR / "argus_history.json"
 _SOUL_FILE = Path("Argus") / "soul.md"
 _MIND_FILE = Path("Argus") / "mind.md"

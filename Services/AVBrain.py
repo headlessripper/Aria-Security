@@ -59,13 +59,14 @@ from Services.SentinelBrain import (
     get_brain, ThreatEvent, ThreatCategory, ThreatSeverity,
 )
 from Interface.write_to_log import write_to_log
+from Config import paths as _paths
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 _LOG = "logs/AVBrain.log"
-_MODEL_DIR = Path.home() / ".AriaSecurity" / "avbrain"
+_MODEL_DIR = _paths.sub("avbrain")
 
 N_CTX            = 8192   # LLM context window (SecurityLLM-Q2_K supports up to 128k)
 MAX_PROMPT_TOK   = 6000   # safety budget for the assembled prompt (leaves room for reply)

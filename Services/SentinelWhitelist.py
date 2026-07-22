@@ -9,11 +9,12 @@ import os
 import threading
 from pathlib import Path
 from typing import List
+from Config import paths as _paths
 
 # The whitelist lives with the rest of the user's Aria data, NOT in the install
 # directory — it is user state, it must survive reinstalls, and keeping it under
 # Config/ meant the running app kept rewriting a file inside the repo.
-_ARIA_HOME = Path.home() / ".AriaSecurity"
+_ARIA_HOME = _paths.data_dir()
 _WHITELIST_PATH = _ARIA_HOME / "sentinel_whitelist.json"
 _LEGACY_PATH = Path("Config") / "sentinel_whitelist.json"
 _INSTANCE: "SentinelWhitelist | None" = None

@@ -59,6 +59,7 @@ import threading
 import time
 
 from pathlib import Path
+from Config import paths as _paths
 
 try:
     from Services.framework.base_service import BaseService
@@ -71,7 +72,7 @@ except Exception:  # pragma: no cover - defensive
     ThreatCategory = None  # type: ignore
     ThreatSeverity = None  # type: ignore
 
-_ARIA_HOME = Path.home() / ".AriaSecurity"
+_ARIA_HOME = _paths.data_dir()
 _STATE_PATH = _ARIA_HOME / "usb_guard_state.json"
 _QUARANTINE_DIR = _ARIA_HOME / "quarantine"
 _SCAN_EXTS = {

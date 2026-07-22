@@ -15,8 +15,9 @@ import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+from Config import paths as _paths
 
-_DEFAULT_PATH = Path.home() / ".AriaSecurity" / "Sense_Map.json"
+_DEFAULT_PATH = _paths.sub("Sense_Map.json")
 
 # Lifecycle of a tracked app.
 STATUS_INSTALLED = "installed"

@@ -11,8 +11,9 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+from Config import paths as _paths
 
-_DB_PATH = Path.home() / ".AriaSecurity" / "scan_history.db"
+_DB_PATH = _paths.sub("scan_history.db")
 _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 _lock = threading.Lock()
 
