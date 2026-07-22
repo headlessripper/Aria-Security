@@ -6,6 +6,7 @@
 // API remain the single source of truth.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:flutter/material.dart';
@@ -72,15 +73,32 @@ class _ShellWindowState extends State<ShellWindow> {
     _init();
   }
 
+  void _log(String msg) {
+    // Windowed apps have no console; write beside the exe so startup failures
+    // are diagnosable instead of showing a silent blank window.
+    try {
+      final dir = File(Platform.resolvedExecutable).parent.path;
+      final f = File('$dir${Platform.pathSeparator}aria_shell.log');
+      f.writeAsStringSync(
+          '${DateTime.now().toIso8601String()}  $msg\n',
+          mode: FileMode.append);
+    } catch (_) {}
+  }
+
   Future<void> _init() async {
     try {
+      _log('initialize() ...');
       await _controller.initialize();
+      _log('initialize() OK');
       await _controller.setBackgroundColor(kBg);
       await _controller.setPopupWindowPolicy(WebviewPopupWindowPolicy.deny);
+      _log('loadUrl($kAriaUrl) ...');
       await _controller.loadUrl(kAriaUrl);
+      _log('loadUrl OK');
       if (!mounted) return;
       setState(() => _ready = true);
-    } catch (e) {
+    } catch (e, st) {
+      _log('FAILED: $e | $st');
       if (!mounted) return;
       // Most commonly: the WebView2 runtime is missing, or the backend is down.
       setState(() => _error = e.toString());
