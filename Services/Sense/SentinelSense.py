@@ -138,15 +138,30 @@ class SentinelSense(BaseService):
 
     name = "SentinelSense"
 
-    def __init__(self, config=None, brain=None):
+    def __init__(self, config=None, brain=None, sense_map=None, journal=None):
         cfg = {"scan_interval": 30.0}
         cfg.update(config or {})
         super().__init__(cfg, brain)
         self._cert = None
         self._state_lock = threading.Lock()
         self._last_snapshot = {}
+        # Injectable so tests never write to the user's real Sense_Map.json.
+        self._map = sense_map
+        self._journal = journal
         global _SENSE_SINGLETON
         _SENSE_SINGLETON = self
+
+    @property
+    def sense_map(self):
+        if self._map is None:
+            self._map = get_sense_map()
+        return self._map
+
+    @property
+    def journal(self):
+        if self._journal is None:
+            self._journal = get_journal()
+        return self._journal
 
     # -- trust ---------------------------------------------------------------
     def _trusted(self, exe) -> bool:
@@ -237,11 +252,11 @@ class SentinelSense(BaseService):
     # -- footprint tracking (Sense_Map) ---------------------------------------
     def _record_footprint(self, key: str, info: dict) -> None:
         """Attribute recently-created paths to a newly-installed app."""
-        smap = get_sense_map()
+        smap = self.sense_map
         smap.upsert_app(key, info)
         rec = smap.get(key) or {}
         files, dirs = attribute(
-            get_journal().entries(), info,
+            self.journal.entries(), info,
             installed_at=float(rec.get("installed_at") or time.time()),
         )
         # The install directory itself always belongs to the app.
@@ -257,7 +272,7 @@ class SentinelSense(BaseService):
 
     def _handle_uninstall(self, key: str, info: dict) -> None:
         """On uninstall, compute what survived and flag it for the user."""
-        smap = get_sense_map()
+        smap = self.sense_map
         rec = smap.get(key)
         if rec is None:
             # Never tracked its install (e.g. installed before Sense ran) —
@@ -304,7 +319,7 @@ class SentinelSense(BaseService):
         # Passive filesystem journal: records what installers create so their
         # footprint can be attributed. Degrades to install-dir-only if it can't start.
         try:
-            if get_journal().start():
+            if self.journal.start():
                 self._log("filesystem journal watching install roots")
             else:
                 self._log("filesystem journal unavailable — "
@@ -332,7 +347,7 @@ class SentinelSense(BaseService):
                     self._log(f"scan loop error: {e}", "ERROR")
         finally:
             try:
-                get_journal().stop()
+                self.journal.stop()
             except Exception:
                 pass
 

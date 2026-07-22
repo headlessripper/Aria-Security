@@ -329,6 +329,8 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       <div class="menu-section-lbl">System</div>
       <button class="menu-item" data-page="storage">
         <span class="material-icons-round">storage</span>Storage</button>
+      <button class="menu-item" data-page="sense">
+        <span class="material-icons-round">travel_explore</span>Sentinel Sense</button>
       <button class="menu-item" data-page="connections">
         <span class="material-icons-round">hub</span>Connections Map</button>
       <button class="menu-item" data-page="net-scope">
@@ -1207,6 +1209,42 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       </div>
     </div>
 
+    <!-- ═══ SENTINEL SENSE ═════════════════════════════════════════════ -->
+    <div class="page" id="page-sense">
+      <div class="pg-title">Sentinel Sense</div>
+
+      <!-- Residual cleanup prompts -->
+      <div id="sense-residual-wrap" style="margin-bottom:12px"></div>
+
+      <!-- Tracked applications -->
+      <div class="card" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="sec-label">Tracked Applications</div>
+          <div id="sense-summary" style="font-size:11px;color:var(--dim)"></div>
+        </div>
+        <div style="overflow-y:auto;max-height:calc(100vh - 300px)">
+          <table class="tbl">
+            <thead><tr>
+              <th>Application</th><th>Publisher</th><th>Status</th>
+              <th>Files</th><th>Dirs</th><th>Registry</th><th>Residuals</th><th></th>
+            </tr></thead>
+            <tbody id="sense-tbody">
+              <tr><td colspan="8" style="text-align:center;color:var(--dim);padding:20px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Expanded data tree for one app -->
+      <div class="card" id="sense-tree-card" style="margin-top:12px;display:none">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="sec-label" id="sense-tree-title">Data Tree</div>
+          <button class="btn btn-ghost btn-sm" onclick="senseCloseTree()">Close</button>
+        </div>
+        <div id="sense-tree" style="max-height:300px;overflow-y:auto;font-family:'Consolas',monospace;font-size:12px"></div>
+      </div>
+    </div>
+
     <!-- ═══ CONNECTIONS MAP ════════════════════════════════════════════ -->
     <div class="page" id="page-connections">
       <div class="pg-title">Connections Map</div>
@@ -1330,6 +1368,18 @@ function fmtSize(b) {
   return (b/1048576).toFixed(1)+'MB';
 }
 function fmtGB(b) { return (b/1073741824).toFixed(1)+' GB'; }
+
+/* HTML-escape for values interpolated into innerHTML (app names, file paths). */
+function esc(s) {
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+/* Escape for a value placed inside a single-quoted inline handler argument. */
+function escAttr(s) {
+  return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
+    .replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 function setText(id, val) {
   const e = $(id);
@@ -2882,6 +2932,114 @@ async function loadStorage(){
   }catch(e){toast('Storage: '+e.message,'error');}
 }
 Refresher.register('storage', loadStorage, 10000);
+
+/* ── Sentinel Sense ───────────────────────────────────────────────── */
+const SENSE_STATUS = {
+  installed:     {label:'Installed', color:'var(--green)'},
+  uninstalled:   {label:'Residuals', color:'var(--amber)'},
+  residual_kept: {label:'Kept',      color:'var(--dim)'},
+  cleaned:       {label:'Cleaned',   color:'var(--green)'},
+};
+
+async function loadSense(){
+  // 1 — pending cleanup prompts
+  try{
+    const res = await (await fetch('/api/sense/residuals')).json();
+    const wrap = document.getElementById('sense-residual-wrap');
+    if(!Array.isArray(res) || !res.length){ wrap.innerHTML=''; }
+    else{
+      wrap.innerHTML = res.map(r=>`
+        <div class="card" style="border-left:3px solid var(--amber);margin-bottom:8px">
+          <div class="row" style="justify-content:space-between;align-items:center;gap:12px">
+            <div>
+              <div style="font-weight:600">${esc(r.name)} was uninstalled</div>
+              <div style="font-size:12px;color:var(--dim)">
+                ${r.residual_count} residual item(s) left behind — ${fmtSize(r.residual_bytes)}
+              </div>
+            </div>
+            <div class="row" style="gap:8px">
+              <button class="btn btn-ghost btn-sm" onclick="senseShowTree('${escAttr(r.key)}')">View data tree</button>
+              <button class="btn btn-ghost btn-sm" onclick="senseKeep('${escAttr(r.key)}')">Keep</button>
+              <button class="btn btn-danger btn-sm" onclick="senseCleanup('${escAttr(r.key)}','${escAttr(r.name)}',${r.residual_count})">Clean up</button>
+            </div>
+          </div>
+        </div>`).join('');
+    }
+  }catch(e){}
+
+  // 2 — tracked application table
+  try{
+    const apps = await (await fetch('/api/sense/apps')).json();
+    const tb = document.getElementById('sense-tbody');
+    if(!Array.isArray(apps) || !apps.length){
+      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:20px">No tracked applications yet — Sentinel Sense records new installs as they happen.</td></tr>';
+      document.getElementById('sense-summary').textContent = '';
+      return;
+    }
+    document.getElementById('sense-summary').textContent =
+      `${apps.length} tracked · ${apps.filter(a=>a.status==='uninstalled').length} awaiting cleanup`;
+    tb.innerHTML = apps.map(a=>{
+      const st = SENSE_STATUS[a.status] || {label:a.status, color:'var(--dim)'};
+      const canClean = a.status === 'uninstalled' && a.residual_count > 0;
+      return `<tr>
+        <td style="font-weight:600">${esc(a.name)}</td>
+        <td style="color:var(--dim)">${esc(a.publisher||'—')}</td>
+        <td><span class="badge" style="background:${st.color};color:var(--bg);opacity:.85">${st.label}</span></td>
+        <td>${a.file_count}</td><td>${a.dir_count}</td><td>${a.reg_count}</td>
+        <td>${a.residual_count ? esc(fmtSize(a.residual_bytes)) : '—'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" onclick="senseShowTree('${escAttr(a.key)}')">Tree</button>
+          ${canClean ? `<button class="btn btn-danger btn-sm" onclick="senseCleanup('${escAttr(a.key)}','${escAttr(a.name)}',${a.residual_count})">Clean</button>` : ''}
+        </td></tr>`;
+    }).join('');
+  }catch(e){
+    document.getElementById('sense-tbody').innerHTML =
+      '<tr><td colspan="8" style="text-align:center;color:var(--red);padding:20px">Failed to load</td></tr>';
+  }
+}
+
+async function senseShowTree(key){
+  try{
+    const rec = await (await fetch('/api/sense/app/'+encodeURIComponent(key))).json();
+    if(rec.error){ toast(rec.error,'error'); return; }
+    const section = (title, items, icon) => {
+      if(!items || !items.length) return '';
+      return `<div style="margin-bottom:10px">
+        <div style="color:var(--dim);font-size:11px;letter-spacing:.04em;margin-bottom:4px">${title} (${items.length})</div>
+        ${items.map(p=>`<div style="padding:2px 0"><span class="material-icons-round" style="font-size:13px;vertical-align:-2px;color:var(--dim)">${icon}</span> ${esc(p)}</div>`).join('')}
+      </div>`;
+    };
+    document.getElementById('sense-tree-title').textContent = 'Data Tree — ' + (rec.name || key);
+    document.getElementById('sense-tree').innerHTML =
+      (section('Directories', rec.dirs, 'folder') +
+       section('Files', rec.files, 'description') +
+       section('Registry', rec.registry, 'key') +
+       section('Residuals still on disk', rec.residuals, 'warning')) ||
+      '<div style="color:var(--dim)">No footprint recorded.</div>';
+    document.getElementById('sense-tree-card').style.display = '';
+  }catch(e){ toast('Could not load data tree','error'); }
+}
+function senseCloseTree(){ document.getElementById('sense-tree-card').style.display='none'; }
+
+async function senseCleanup(key, name, count){
+  if(!confirm(`Permanently delete ${count} residual item(s) left by "${name}"?\n\nThis cannot be undone. Only files Sentinel Sense recorded for this application will be removed.`)) return;
+  try{
+    const r = await (await fetch('/api/sense/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})})).json();
+    if(r.error){ toast(r.error,'error'); return; }
+    toast(`Removed ${r.deleted} item(s), freed ${fmtSize(r.freed_bytes)}` + (r.failed?` · ${r.failed} skipped`:''), 'success');
+    senseCloseTree(); loadSense();
+  }catch(e){ toast('Cleanup failed','error'); }
+}
+
+async function senseKeep(key){
+  try{
+    const r = await (await fetch('/api/sense/keep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})})).json();
+    if(r.error){ toast(r.error,'error'); return; }
+    toast('Residuals kept — still tracked in Sense_Map','info');
+    loadSense();
+  }catch(e){ toast('Failed','error'); }
+}
+Refresher.register('sense', loadSense, 15000);
 
 /* ── Connections Map ──────────────────────────────────────────────── */
 let _connFilter={status:'ALL',text:''};
