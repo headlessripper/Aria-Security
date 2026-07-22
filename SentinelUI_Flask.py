@@ -944,6 +944,105 @@ def api_console_clear():
         return jsonify({"error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SENTINEL SENSE  (install footprint tracking + residual cleanup)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/sense/apps")
+def api_sense_apps():
+    """Every tracked application with a summary of its footprint."""
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        out = []
+        for key, rec in get_sense_map().all().items():
+            out.append({
+                "key": key,
+                "name": rec.get("name") or key,
+                "publisher": rec.get("publisher", ""),
+                "install_location": rec.get("install_location", ""),
+                "status": rec.get("status", "installed"),
+                "installed_at": rec.get("installed_at"),
+                "uninstalled_at": rec.get("uninstalled_at"),
+                "file_count": len(rec.get("files", [])),
+                "dir_count": len(rec.get("dirs", [])),
+                "reg_count": len(rec.get("registry", [])),
+                "residual_count": len(rec.get("residuals", [])),
+                "residual_bytes": rec.get("residual_bytes", 0),
+            })
+        out.sort(key=lambda a: (a["status"] != "uninstalled", a["name"].lower()))
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/app/<path:key>")
+def api_sense_app(key):
+    """Full data tree for one application."""
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        rec = get_sense_map().get(key)
+        if rec is None:
+            return jsonify({"error": "unknown app"}), 404
+        return jsonify(rec)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/residuals")
+def api_sense_residuals():
+    """Uninstalled apps still awaiting a cleanup decision."""
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        return jsonify([
+            {"key": k, "name": v.get("name") or k,
+             "residual_count": len(v.get("residuals", [])),
+             "residual_bytes": v.get("residual_bytes", 0),
+             "residuals": v.get("residuals", [])}
+            for k, v in get_sense_map().pending_residuals().items()
+        ])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/cleanup", methods=["POST"])
+def api_sense_cleanup():
+    """Permanently delete an app's residuals (guarded by the safety rails)."""
+    key = (request.json or {}).get("key", "")
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        from Services.Sense.residuals import delete_residuals
+        smap = get_sense_map()
+        rec = smap.get(key)
+        if rec is None:
+            return jsonify({"error": "unknown app"}), 404
+        deleted, failed, freed = delete_residuals(rec.get("residuals", []))
+        smap.mark_cleaned(key, freed_bytes=freed)
+        return jsonify({"status": "cleaned", "deleted": len(deleted),
+                        "failed": len(failed), "freed_bytes": freed,
+                        "failed_paths": failed[:20]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/keep", methods=["POST"])
+def api_sense_keep():
+    """User declined cleanup: leave files on disk but keep tracking them."""
+    key = (request.json or {}).get("key", "")
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        smap = get_sense_map()
+        if smap.get(key) is None:
+            return jsonify({"error": "unknown app"}), 404
+        smap.mark_kept(key)
+        return jsonify({"status": "kept"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BEHAVIORAL RULES
 # ══════════════════════════════════════════════════════════════════════════════
 

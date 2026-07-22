@@ -75,6 +75,11 @@ import time
 
 from pathlib import Path
 
+from Services.Sense.attribution import attribute, footprint_paths
+from Services.Sense.fs_journal import get_journal
+from Services.Sense.residuals import find_residuals
+from Services.Sense.sense_map import get_sense_map
+
 try:  # keep the pure core importable in isolation (e.g. non-Windows CI)
     import winreg  # type: ignore
 except Exception:  # pragma: no cover - non-Windows
@@ -198,9 +203,12 @@ class SentinelSense(BaseService):
 
     # -- diff + emit ---------------------------------------------------------
     def _process_snapshot(self, before: dict, after: dict) -> None:
-        """Diff two snapshots; emit threats for suspicious installs + leftovers."""
-        installed, uninstalled = diff_installs(before, after)
-        for info in installed:
+        """Diff two snapshots; record footprints, emit threats, find residuals."""
+        installed_keys = sorted(after.keys() - before.keys())
+        uninstalled_keys = sorted(before.keys() - after.keys())
+
+        for key in installed_keys:
+            info = after[key]
             try:
                 sus, reason = classify_install(info, is_trusted_exe=self._trusted)
                 if sus:
@@ -213,18 +221,66 @@ class SentinelSense(BaseService):
                     )
             except Exception as e:
                 self._log(f"install classify error: {e}", "ERROR")
-        for info in uninstalled:
+            # Record what this installer put on the machine.
             try:
-                loc = info.get("install_location")
-                if loc and os.path.isdir(loc):
-                    self.emit_threat(
-                        ThreatCategory.SYSTEM, ThreatSeverity.INFO,
-                        "Uninstall leftovers",
-                        f"{info.get('name')}: residual files remain at {loc}",
-                        file_path=loc,
-                    )
+                self._record_footprint(key, info)
+            except Exception as e:
+                self._log(f"footprint record error: {e}", "ERROR")
+
+        for key in uninstalled_keys:
+            info = before[key]
+            try:
+                self._handle_uninstall(key, info)
             except Exception as e:
                 self._log(f"leftover check error: {e}", "ERROR")
+
+    # -- footprint tracking (Sense_Map) ---------------------------------------
+    def _record_footprint(self, key: str, info: dict) -> None:
+        """Attribute recently-created paths to a newly-installed app."""
+        smap = get_sense_map()
+        smap.upsert_app(key, info)
+        rec = smap.get(key) or {}
+        files, dirs = attribute(
+            get_journal().entries(), info,
+            installed_at=float(rec.get("installed_at") or time.time()),
+        )
+        # The install directory itself always belongs to the app.
+        loc = (info.get("install_location") or "").strip()
+        if loc and loc not in dirs:
+            dirs.append(loc)
+        reg = []
+        for hive_name, path in (("HKCU", _UNINSTALL_KEYS[0][1]),) if _UNINSTALL_KEYS else ():
+            reg.append(f"{hive_name}\\{path}\\{key}")
+        smap.set_footprint(key, files=files, dirs=dirs, registry=reg)
+        self._log(f"footprint recorded for {info.get('name') or key}: "
+                  f"{len(files)} files, {len(dirs)} dirs")
+
+    def _handle_uninstall(self, key: str, info: dict) -> None:
+        """On uninstall, compute what survived and flag it for the user."""
+        smap = get_sense_map()
+        rec = smap.get(key)
+        if rec is None:
+            # Never tracked its install (e.g. installed before Sense ran) —
+            # fall back to the install directory alone.
+            smap.upsert_app(key, info)
+            loc = (info.get("install_location") or "").strip()
+            smap.set_footprint(key, files=[], dirs=[loc] if loc else [], registry=[])
+            rec = smap.get(key) or {}
+
+        smap.mark_uninstalled(key)
+        paths = footprint_paths(rec.get("files", []), rec.get("dirs", []))
+        found, total = find_residuals(paths)
+        smap.set_residuals(key, found, total)
+        if found:
+            self.emit_threat(
+                ThreatCategory.SYSTEM, ThreatSeverity.INFO,
+                "Uninstall leftovers",
+                f"{info.get('name') or key}: {len(found)} residual item(s) "
+                f"({total // 1024} KB) remain — review in Sentinel Sense",
+                file_path=found[0],
+                extra={"sense_key": key, "residual_count": len(found),
+                       "residual_bytes": total},
+            )
 
     # -- state persistence ---------------------------------------------------
     def _persist(self, snapshot: dict) -> None:
@@ -245,23 +301,40 @@ class SentinelSense(BaseService):
 
     # -- main loop -----------------------------------------------------------
     def _run(self) -> None:
+        # Passive filesystem journal: records what installers create so their
+        # footprint can be attributed. Degrades to install-dir-only if it can't start.
+        try:
+            if get_journal().start():
+                self._log("filesystem journal watching install roots")
+            else:
+                self._log("filesystem journal unavailable — "
+                          "footprints limited to install directories", "WARN")
+        except Exception as e:
+            self._log(f"journal start error: {e}", "ERROR")
+
         try:
             snap = self._snapshot_installed()
             self._persist(snap)
         except Exception as e:
             self._log(f"initial snapshot error: {e}", "ERROR")
             snap = {}
-        while not self._stopping():
-            self._heartbeat()
-            if not self._sleep(float(self.config.get("scan_interval", 30.0))):
-                break
+        try:
+            while not self._stopping():
+                self._heartbeat()
+                if not self._sleep(float(self.config.get("scan_interval", 30.0))):
+                    break
+                try:
+                    new = self._snapshot_installed()
+                    self._process_snapshot(snap, new)
+                    snap = new
+                    self._persist(snap)
+                except Exception as e:
+                    self._log(f"scan loop error: {e}", "ERROR")
+        finally:
             try:
-                new = self._snapshot_installed()
-                self._process_snapshot(snap, new)
-                snap = new
-                self._persist(snap)
-            except Exception as e:
-                self._log(f"scan loop error: {e}", "ERROR")
+                get_journal().stop()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
