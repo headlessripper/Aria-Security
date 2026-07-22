@@ -209,8 +209,14 @@ import Services.SentinelScanHistory as _sh
 import Services.SentinelScheduler   as _sched
 from Services.monitors import (
     system_monitor, process_monitor, netstat,
-    console_logs, geo_blocks, mem_scan,
+    geo_blocks, mem_scan,
 )
+from Services.log_bus import get_log_bus, install_stdout_tee
+
+# Capture everything the app prints (engine + services) into the in-app console.
+# Installed before the services start so their startup output is captured too.
+_log_bus = get_log_bus()
+install_stdout_tee(_log_bus)
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
@@ -919,27 +925,25 @@ def api_quarantine_delete(qid):
 # CONSOLE / SYSTEM LOG
 # ══════════════════════════════════════════════════════════════════════════════
 
-_LOG_DIR   = _ROOT / "logs"
-_LOG_FILES = [
-    "Sentinel.log", "AVBrain.log", "NetPro.log", "Ransom.log",
-    "Behavioral.log", "ExploitPro.log", "psds.log",
-    "ThreatIntel.log", "ModelUpdater.log", "Sense.log",
-]
-
+#
+# The console reads the in-app log bus, NOT files on disk: everything the engine
+# and services print is teed into the bus (see Services/log_bus.py), so the UI
+# shows live output instead of stale log files.
+#
 @app.route("/api/console/logs")
 def api_console_logs():
     n = int(request.args.get("lines", 400))
     module = request.args.get("module", "")
     try:
-        return jsonify({"lines": console_logs.tail(_LOG_DIR, _LOG_FILES, n, module)})
+        return jsonify({"lines": _log_bus.lines(n, module),
+                        "sources": _log_bus.sources()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/console/clear", methods=["POST"])
 def api_console_clear():
-    module = (request.json or {}).get("module", "")
     try:
-        return jsonify({"status": "cleared", "files": console_logs.clear(_LOG_DIR, _LOG_FILES, module)})
+        return jsonify({"status": "cleared", "lines": _log_bus.clear()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1769,6 +1773,16 @@ _scheduler.start()
 # ══════════════════════════════════════════════════════════════════════════════
 # SOCKET.IO HANDLERS
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _push_console_line(rec):
+    """Stream each captured log line to the Console page in real time."""
+    try:
+        socketio.emit("console_line", rec)
+    except Exception:
+        pass
+
+_log_bus.subscribe(_push_console_line)
+
 
 @socketio.on("connect")
 def on_connect():

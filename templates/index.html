@@ -2657,11 +2657,25 @@ Refresher.register('about', loadAbout, 999999); // load once
 ═══════════════════════════════════════════════════════════════════ */
 
 /* ── Console ──────────────────────────────────────────────────────── */
+/* Keep the module dropdown in sync with the sources the log bus has actually
+   seen (they are discovered at runtime, not a fixed list of log files). */
+function syncConsoleSources(sources){
+  const sel=$('console-module'); if(!sel||!Array.isArray(sources)) return;
+  const current=sel.value;
+  const have=Array.from(sel.options).map(o=>o.value);
+  const wanted=['',...sources];
+  if(have.length===wanted.length && wanted.every((w,i)=>have[i]===w)) return;
+  sel.innerHTML='<option value="">All Modules</option>'+
+    sources.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  if(wanted.includes(current)) sel.value=current;
+}
+
 async function loadConsole(){
   const mod=$('console-module')?.value||'';
   const filt=($('console-filter')?.value||'').toLowerCase();
   try{
     const d=await api('GET',`/api/console/logs?lines=400&module=${encodeURIComponent(mod)}`);
+    syncConsoleSources(d.sources);
     const lines=(d.lines||[]).filter(l=>!filt||l.toLowerCase().includes(filt));
     const pre=$('console-output'); if(!pre) return;
     if(!lines.length){pre.textContent='No log entries match filter.';return;}
@@ -2681,14 +2695,36 @@ $('console-refresh-btn')?.addEventListener('click', loadConsole);
 $('console-module')?.addEventListener('change', loadConsole);
 $('console-filter')?.addEventListener('input', debounce(loadConsole, 400));
 $('console-clear-btn')?.addEventListener('click', async()=>{
-  const mod=$('console-module')?.value||'';
   try{
-    await api('POST','/api/console/clear', mod?{module:mod}:{});
+    await api('POST','/api/console/clear', {});
     toast('Console cleared','info');
     loadConsole();
   }catch(e){toast(e.message,'error');}
 });
-Refresher.register('console', loadConsole, 2000);
+
+/* Live stream: append lines as the app prints them (no polling lag). */
+if (typeof socket !== 'undefined' && socket) {
+  socket.on('console_line', rec => {
+    if (_activePage !== 'console') return;              // only when visible
+    const pre=$('console-output'); if(!pre) return;
+    const mod=($('console-module')?.value||'').toLowerCase();
+    if(mod && !(rec.source||'').toLowerCase().includes(mod)) return;
+    const line=`[${rec.source}] ${rec.text}`;
+    const filt=($('console-filter')?.value||'').toLowerCase();
+    if(filt && !line.toLowerCase().includes(filt)) return;
+    const lu=line.toUpperCase();
+    const c=lu.includes('ERROR')||lu.includes('CRITICAL')||lu.includes('EXCEPTION')?'var(--red)'
+           :lu.includes('WARN')?'var(--orange)'
+           :lu.includes('[AVBRAIN]')||lu.includes('[SENTINEL]')?'var(--accent)'
+           :'var(--green)';
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+    if(pre.textContent==='No log entries match filter.') pre.innerHTML='';
+    pre.insertAdjacentHTML('beforeend',
+      (pre.innerHTML?'\n':'')+`<span style="color:${c}">${esc(line)}</span>`);
+    if(atBottom) pre.scrollTop=pre.scrollHeight;
+  });
+}
+Refresher.register('console', loadConsole, 5000);
 
 /* ── Action Center ────────────────────────────────────────────────── */
 // Store quarantine items in a JS array; select by numeric index to avoid
