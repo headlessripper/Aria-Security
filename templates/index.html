@@ -1355,9 +1355,7 @@ socket.on('protection_toggled', d => {
 
 socket.on('error_event', d => toast(d.message, 'error'));
 
-socket.on('scan_progress', handleScanProgress);
 
-socket.on('install_progress', handleInstallProgress);
 
 socket.on('aria_reply', d => {
   // Remove any "thinking" bubbles
@@ -1489,8 +1487,11 @@ async function toggleProtection() {
     btns.forEach(b => { if(b) b.disabled=false; });
   }
 }
-$('toggle-protection-btn').addEventListener('click', toggleProtection);
-$('prot-toggle-btn').addEventListener('click', toggleProtection);
+/* Dashboard owns the protection toggle. (The Protection page had a second
+   button, prot-toggle-btn; guard it so a missing element can't halt the
+   rest of this script — that would silently kill every Refresher.) */
+$('toggle-protection-btn')?.addEventListener('click', toggleProtection);
+$('prot-toggle-btn')?.addEventListener('click', toggleProtection);
 
 /* ── Feed ─────────────────────────────────────────────────────────── */
 const CAT_C={
