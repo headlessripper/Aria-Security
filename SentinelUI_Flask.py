@@ -1115,97 +1115,6 @@ def api_yara_rules_import():
         return jsonify({"error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
-# VIRUSTOTAL
-# ══════════════════════════════════════════════════════════════════════════════
-
-_VT_KEY_PATH = Path.home() / ".AriaSecurity" / "vt_key.json"
-
-def _vt_key() -> str:
-    try:
-        if _VT_KEY_PATH.exists():
-            return json.loads(_VT_KEY_PATH.read_text())["key"]
-    except Exception:
-        pass
-    # Also check Config.json
-    try:
-        cfg = _load_config()
-        return cfg.get("virustotal_api_key", "")
-    except Exception:
-        return ""
-
-@app.route("/api/virustotal/key", methods=["POST"])
-def api_vt_set_key():
-    key = (request.json or {}).get("key", "")
-    _VT_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _VT_KEY_PATH.write_text(json.dumps({"key": key}))
-    return jsonify({"status": "saved"})
-
-@app.route("/api/virustotal/<query_type>/<path:query>")
-def api_vt_query(query_type, query):
-    import urllib.request
-    key = _vt_key()
-    if not key:
-        return jsonify({"error": "No VT API key configured"}), 400
-    endpoints = {
-        "hash":   f"https://www.virustotal.com/api/v3/files/{query}",
-        "ip":     f"https://www.virustotal.com/api/v3/ip_addresses/{query}",
-        "url":    f"https://www.virustotal.com/api/v3/urls/{query}",
-        "domain": f"https://www.virustotal.com/api/v3/domains/{query}",
-    }
-    url = endpoints.get(query_type)
-    if not url:
-        return jsonify({"error": "unknown type"}), 400
-    try:
-        req = urllib.request.Request(url, headers={"x-apikey": key})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode())
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ABUSEIPDB
-# ══════════════════════════════════════════════════════════════════════════════
-
-_ABUSE_KEY_PATH = Path.home() / ".AriaSecurity" / "abuseipdb_key.json"
-
-def _abuse_key() -> str:
-    try:
-        if _ABUSE_KEY_PATH.exists():
-            return json.loads(_ABUSE_KEY_PATH.read_text())["key"]
-    except Exception:
-        pass
-    try:
-        cfg = _load_config()
-        return cfg.get("abuseipdb_api_key", "")
-    except Exception:
-        return ""
-
-@app.route("/api/abuseipdb/key", methods=["POST"])
-def api_abuse_set_key():
-    key = (request.json or {}).get("key", "")
-    _ABUSE_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _ABUSE_KEY_PATH.write_text(json.dumps({"key": key}))
-    return jsonify({"status": "saved"})
-
-@app.route("/api/abuseipdb/lookup", methods=["POST"])
-def api_abuse_lookup():
-    ip = (request.json or {}).get("ip", "").strip()
-    if not ip:
-        return jsonify({"error": "no ip"}), 400
-    key = _abuse_key()
-    if not key:
-        return jsonify({"error": "No AbuseIPDB API key configured"}), 400
-    try:
-        from Services.SentinelThreatIntelligence import lookup_ip_abuseipdb
-        data = lookup_ip_abuseipdb(ip, key)
-        if not data:
-            return jsonify({"error": "No data returned"}), 404
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════════════════════════════
 # SANDBOX
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1375,17 +1284,6 @@ def api_geo_blocks_set():
 # THREAT INTEL
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route("/api/threat_intel/stats")
-def api_ti_stats():
-    brain = get_brain()
-    tc = {cat.name: cnt for cat, cnt in brain._category_counts.items()}
-    return jsonify({
-        "total":      brain._total_threats,
-        "malware":    tc.get("MALWARE", 0),
-        "network":    tc.get("NETWORK", 0),
-        "behavioral": tc.get("BEHAVIORAL", 0),
-        "events":     [e.to_dict() for e in list(brain._threat_log)[-100:]],
-    })
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STORAGE
@@ -1478,33 +1376,7 @@ def _load_plugins() -> list:
         "installed": _module_installed(p["module"]),
     } for p in _PLUGIN_CATALOG]
 
-@app.route("/api/plugins")
-def api_plugins_get():
-    return jsonify(_load_plugins())
 
-@app.route("/api/plugins/<path:pkg>/install", methods=["POST"])
-def api_plugins_install(pkg):
-    entry = next((p for p in _PLUGIN_CATALOG if p["pkg"] == pkg), None)
-    if not entry:
-        return jsonify({"error": f"Unknown plugin: {pkg}"}), 400
-
-    def _install():
-        try:
-            socketio.emit("install_progress", {"pkg": pkg, "status": "installing"})
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", pkg],
-                capture_output=True, text=True, timeout=600,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            ok = (result.returncode == 0) and _module_installed(entry["module"])
-            socketio.emit("install_progress", {
-                "pkg": pkg, "status": "done", "success": ok,
-                "error": "" if ok else (result.stderr or result.stdout)[-400:],
-            })
-        except Exception as exc:
-            socketio.emit("install_progress", {"pkg": pkg, "status": "error", "error": str(exc)})
-    threading.Thread(target=_install, daemon=True).start()
-    return jsonify({"status": "started"})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AVBRAIN MODEL  (download the GGUF that powers Argus, then hot-load it)
@@ -1704,35 +1576,7 @@ def api_about():
 # TOOLS — ping / traceroute
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route("/api/tools/ping", methods=["POST"])
-def api_tools_ping():
-    host = (request.json or {}).get("host", "").strip()
-    if not host:
-        return jsonify({"error": "no host"}), 400
-    try:
-        r = subprocess.run(
-            ["ping", "-n", "4", host],
-            capture_output=True, text=True, timeout=20,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        return jsonify({"output": r.stdout or r.stderr, "returncode": r.returncode})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
-@app.route("/api/tools/traceroute", methods=["POST"])
-def api_tools_traceroute():
-    host = (request.json or {}).get("host", "").strip()
-    if not host:
-        return jsonify({"error": "no host"}), 400
-    try:
-        r = subprocess.run(
-            ["tracert", "-d", "-h", "20", host],
-            capture_output=True, text=True, timeout=60,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        return jsonify({"output": r.stdout or r.stderr, "returncode": r.returncode})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NET SCOPE  (per-NIC bandwidth snapshot)
