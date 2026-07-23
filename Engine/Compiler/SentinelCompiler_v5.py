@@ -27,6 +27,11 @@ from Engine.Detection.cert_reputation import CertReputation
 from Engine.Detection.fusion import fuse as _fuse
 from Interface.write_to_log import write_to_log
 
+# Verdicts that are NOT threats. Anything outside this set counts as a detection.
+# WHITELISTED belongs here: the user explicitly trusted that path, so surfacing
+# it as malware is a false positive (and used to zero the protection level).
+_BENIGN_VERDICTS = frozenset({"CLEAN", "IGNORED", "WHITELISTED"})
+
 
 class VirusScanner:
     def __init__(self, max_workers: int = 4):
@@ -402,8 +407,13 @@ class VirusScanner:
                     break
 
                 file_path, result = future.result()
-                if result['verdict'] != "CLEAN" and result['verdict'] != "IGNORED":
-                    detections.append(result)
+                # Benign outcomes are NOT detections. WHITELISTED in particular
+                # means the user trusted this path — reporting it as a threat
+                # (and penalising the protection level) is a false positive.
+                if result['verdict'] not in _BENIGN_VERDICTS:
+                    # Carry the path so consumers can report/act on the file
+                    # instead of stringifying the whole result dict.
+                    detections.append({**result, "file": str(file_path)})
                     if result['verdict'] == "MALWARE" and notify_confirmed_only:
                         confirmed_malware.append(result)
 

@@ -64,13 +64,29 @@ def write_log(message: str, level=logging.DEBUG):
 setup_logger()
 from datetime import datetime
 
+def _to_console_bus(message: str, file_path: str) -> None:
+    """Mirror the line into the in-app console bus.
+
+    The Console page reads the bus, not files, so service logging has to be
+    published here as well as written to disk. Uses the log file's stem as the
+    source (e.g. logs/NetPro.log -> "NetPro"). Never raises.
+    """
+    try:
+        from Services.log_bus import get_log_bus
+        source = os.path.splitext(os.path.basename(file_path or ''))[0] or 'Sentinel'
+        get_log_bus().emit(str(message), source=source)
+    except Exception:
+        pass
+
+
 def write_to_log(message: str, file_path: str = 'logs/Sentinel.log') -> None:
-    """Append a timestamped line to *file_path*.
+    """Append a timestamped line to *file_path* and publish it to the console bus.
 
     This function is intentionally silent on all I/O errors — a logging
     helper must never crash its caller.  If writing fails, the message is
     echoed to stderr so it is not silently lost.
     """
+    _to_console_bus(message, file_path)
     try:
         dir_part = os.path.dirname(file_path)
         if dir_part:

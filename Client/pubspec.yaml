@@ -1,0 +1,25 @@
+name: aria_shell
+description: "Aria Security — native Windows shell hosting the Aria UI."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # WebView2-backed view that renders the Aria UI served on 127.0.0.1:8765.
+  webview_windows: ^0.4.0
+
+  # Frameless window + custom title bar (drag, snap, minimise/maximise/close).
+  bitsdojo_window: ^0.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

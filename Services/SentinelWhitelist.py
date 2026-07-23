@@ -9,8 +9,14 @@ import os
 import threading
 from pathlib import Path
 from typing import List
+from Config import paths as _paths
 
-_WHITELIST_PATH = "Config/sentinel_whitelist.json"
+# The whitelist lives with the rest of the user's Aria data, NOT in the install
+# directory — it is user state, it must survive reinstalls, and keeping it under
+# Config/ meant the running app kept rewriting a file inside the repo.
+_ARIA_HOME = _paths.data_dir()
+_WHITELIST_PATH = _ARIA_HOME / "sentinel_whitelist.json"
+_LEGACY_PATH = Path("Config") / "sentinel_whitelist.json"
 _INSTANCE: "SentinelWhitelist | None" = None
 
 
@@ -42,14 +48,46 @@ class SentinelWhitelist:
     is tiny in practice.
     """
 
-    def __init__(self, path: str = _WHITELIST_PATH):
+    def __init__(self, path=_WHITELIST_PATH):
         self._path   = Path(path)
         self._lock   = threading.Lock()
         self._files:  set  = set()
         self._dirs:   list = []
         self._ips:    set  = set()
         self._hashes: set  = set()
+        # Bumped on every mutation. Consumers that cache a copy can compare this
+        # and refresh, so a whitelist edit takes effect immediately instead of
+        # after a restart.
+        self._version: int = 0
+        self._migrate_legacy()
         self._load()
+
+    @property
+    def version(self) -> int:
+        return self._version
+
+    def _migrate_legacy(self) -> None:
+        """One-time move of the old Config/sentinel_whitelist.json into ~/.AriaSecurity.
+
+        ONLY for an instance using the default location. An instance opened on an
+        explicit path (tests, alternate profiles) must never touch the real user
+        file — doing so would migrate live data into, say, a pytest tmp dir and
+        delete the original.
+        """
+        try:
+            if Path(self._path) != Path(_WHITELIST_PATH):
+                return
+            if self._path.exists() or not _LEGACY_PATH.exists():
+                return
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(_LEGACY_PATH.read_text(encoding="utf-8"),
+                                  encoding="utf-8")
+            try:
+                _LEGACY_PATH.unlink()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
@@ -80,6 +118,7 @@ class SentinelWhitelist:
                     "hashes": sorted(self._hashes),
                 }, f, indent=2)
             os.replace(tmp_path, self._path)
+            self._version += 1      # signal consumers to refresh
         except Exception:
             pass
 

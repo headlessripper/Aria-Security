@@ -1,8 +1,8 @@
 def test_monitors_package_imports():
     from Services.monitors import (
-        system_monitor, process_monitor, netstat, console_logs, geo_blocks, mem_scan,
+        system_monitor, process_monitor, netstat, geo_blocks, mem_scan,
     )
-    for m in (system_monitor, process_monitor, netstat, console_logs, geo_blocks, mem_scan):
+    for m in (system_monitor, process_monitor, netstat, geo_blocks, mem_scan):
         assert m is not None
 
 def test_monitors_have_no_flask_import():

@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Callable
 
 from Services.framework.base_service import BaseService
+from Config import paths as _paths
 
-_SCHED_PATH = Path.home() / ".AriaSecurity" / "schedules.json"
+_SCHED_PATH = _paths.sub("schedules.json")
 _SCHED_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 

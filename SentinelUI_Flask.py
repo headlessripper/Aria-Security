@@ -53,7 +53,13 @@ except Exception as _qe:
 from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_socketio import SocketIO, emit
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+# Flask resolves template/static folders relative to this module, which does not
+# exist as a directory once frozen — point them at the bundled data root instead.
+from Interface.find_items import base_path as _base_path
+_ASSET_ROOT = _base_path()
+app = Flask(__name__,
+            template_folder=os.path.join(_ASSET_ROOT, "templates"),
+            static_folder=os.path.join(_ASSET_ROOT, "static"))
 app.config["SECRET_KEY"] = "sentinel-secret-0x1f4a"
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*",
                     logger=False, engineio_logger=False)
@@ -209,8 +215,14 @@ import Services.SentinelScanHistory as _sh
 import Services.SentinelScheduler   as _sched
 from Services.monitors import (
     system_monitor, process_monitor, netstat,
-    console_logs, geo_blocks, mem_scan,
+    geo_blocks, mem_scan,
 )
+from Services.log_bus import get_log_bus, install_stdout_tee
+
+# Capture everything the app prints (engine + services) into the in-app console.
+# Installed before the services start so their startup output is captured too.
+_log_bus = get_log_bus()
+install_stdout_tee(_log_bus)
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
@@ -511,7 +523,33 @@ def api_firewall_rules_unblock():
         )
         if r.returncode == 0 and "deleted" in r.stdout.lower():
             deleted += 1
-    return jsonify({"status": "unblocked", "ip": ip, "rules_deleted": deleted})
+
+    # Optionally trust the IP so the network engine stops re-blocking it. The
+    # whitelist is live (version-synced), so this takes effect on the next poll
+    # rather than needing a restart.
+    whitelisted = False
+    if (request.json or {}).get("whitelist"):
+        try:
+            from Services.SentinelWhitelist import get_whitelist
+            get_whitelist().add_ip(ip)
+            whitelisted = True
+        except Exception as e:
+            return jsonify({"status": "unblocked", "ip": ip,
+                            "rules_deleted": deleted,
+                            "whitelisted": False, "error": str(e)})
+        # Drop it from the engine's dedupe sets too, so if it is ever removed
+        # from the whitelist a fresh block can still be reported.
+        try:
+            net = getattr(_state.get_service(), "_net_thread", None)
+            net_svc = getattr(net, "_svc", None)
+            if net_svc is not None:
+                net_svc._block_alerted.discard(ip)
+                net_svc._blocked_ips.discard(ip)
+        except Exception:
+            pass
+
+    return jsonify({"status": "unblocked", "ip": ip,
+                    "rules_deleted": deleted, "whitelisted": whitelisted})
 
 def _fw_clear_prefix(prefix: str) -> tuple[int, list]:
     """Enumerate and delete all rules whose name starts with prefix."""
@@ -919,29 +957,147 @@ def api_quarantine_delete(qid):
 # CONSOLE / SYSTEM LOG
 # ══════════════════════════════════════════════════════════════════════════════
 
-_LOG_DIR   = _ROOT / "logs"
-_LOG_FILES = [
-    "Sentinel.log", "AVBrain.log", "NetPro.log", "Ransom.log",
-    "Behavioral.log", "ExploitPro.log", "psds.log",
-    "ThreatIntel.log", "ModelUpdater.log", "Sense.log",
-]
-
+#
+# The console reads the in-app log bus, NOT files on disk: everything the engine
+# and services print is teed into the bus (see Services/log_bus.py), so the UI
+# shows live output instead of stale log files.
+#
 @app.route("/api/console/logs")
 def api_console_logs():
     n = int(request.args.get("lines", 400))
     module = request.args.get("module", "")
     try:
-        return jsonify({"lines": console_logs.tail(_LOG_DIR, _LOG_FILES, n, module)})
+        return jsonify({"lines": _log_bus.lines(n, module),
+                        "sources": _log_bus.sources()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/console/clear", methods=["POST"])
 def api_console_clear():
-    module = (request.json or {}).get("module", "")
     try:
-        return jsonify({"status": "cleared", "files": console_logs.clear(_LOG_DIR, _LOG_FILES, module)})
+        return jsonify({"status": "cleared", "lines": _log_bus.clear()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NATIVE FILE / FOLDER PICKER
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/pick", methods=["POST"])
+def api_pick():
+    """Open a native Windows picker and return the chosen path.
+
+    The WebView can't open one itself (and an <input type=file> never yields a
+    real path), so the dialog is opened on the host — same machine as the UI.
+    Body: {"mode": "file"|"folder", "title": str, "initial_dir": str}
+    """
+    d = request.json or {}
+    try:
+        from Services.native_dialogs import pick
+        res = pick(d.get("mode", "file"), d.get("title", ""), d.get("initial_dir", ""))
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"path": "", "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SENTINEL SENSE  (install footprint tracking + residual cleanup)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/sense/apps")
+def api_sense_apps():
+    """Every tracked application with a summary of its footprint."""
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        out = []
+        for key, rec in get_sense_map().all().items():
+            out.append({
+                "key": key,
+                "name": rec.get("name") or key,
+                "publisher": rec.get("publisher", ""),
+                "install_location": rec.get("install_location", ""),
+                "status": rec.get("status", "installed"),
+                "installed_at": rec.get("installed_at"),
+                "uninstalled_at": rec.get("uninstalled_at"),
+                "file_count": len(rec.get("files", [])),
+                "dir_count": len(rec.get("dirs", [])),
+                "reg_count": len(rec.get("registry", [])),
+                "residual_count": len(rec.get("residuals", [])),
+                "residual_bytes": rec.get("residual_bytes", 0),
+            })
+        out.sort(key=lambda a: (a["status"] != "uninstalled", a["name"].lower()))
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/app/<path:key>")
+def api_sense_app(key):
+    """Full data tree for one application."""
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        rec = get_sense_map().get(key)
+        if rec is None:
+            return jsonify({"error": "unknown app"}), 404
+        return jsonify(rec)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/residuals")
+def api_sense_residuals():
+    """Uninstalled apps still awaiting a cleanup decision."""
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        return jsonify([
+            {"key": k, "name": v.get("name") or k,
+             "residual_count": len(v.get("residuals", [])),
+             "residual_bytes": v.get("residual_bytes", 0),
+             "residuals": v.get("residuals", [])}
+            for k, v in get_sense_map().pending_residuals().items()
+        ])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/cleanup", methods=["POST"])
+def api_sense_cleanup():
+    """Permanently delete an app's residuals (guarded by the safety rails)."""
+    key = (request.json or {}).get("key", "")
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        from Services.Sense.residuals import delete_residuals
+        smap = get_sense_map()
+        rec = smap.get(key)
+        if rec is None:
+            return jsonify({"error": "unknown app"}), 404
+        deleted, failed, freed = delete_residuals(rec.get("residuals", []))
+        smap.mark_cleaned(key, freed_bytes=freed)
+        return jsonify({"status": "cleaned", "deleted": len(deleted),
+                        "failed": len(failed), "freed_bytes": freed,
+                        "failed_paths": failed[:20]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sense/keep", methods=["POST"])
+def api_sense_keep():
+    """User declined cleanup: leave files on disk but keep tracking them."""
+    key = (request.json or {}).get("key", "")
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    try:
+        from Services.Sense.sense_map import get_sense_map
+        smap = get_sense_map()
+        if smap.get(key) is None:
+            return jsonify({"error": "unknown app"}), 404
+        smap.mark_kept(key)
+        return jsonify({"status": "kept"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BEHAVIORAL RULES
@@ -1008,97 +1164,6 @@ def api_yara_rules_import():
         import shutil
         shutil.copy2(str(src), str(_YARA_USER_PATH / src.name))
         return jsonify({"status": "imported", "name": src.name})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VIRUSTOTAL
-# ══════════════════════════════════════════════════════════════════════════════
-
-_VT_KEY_PATH = Path.home() / ".AriaSecurity" / "vt_key.json"
-
-def _vt_key() -> str:
-    try:
-        if _VT_KEY_PATH.exists():
-            return json.loads(_VT_KEY_PATH.read_text())["key"]
-    except Exception:
-        pass
-    # Also check Config.json
-    try:
-        cfg = _load_config()
-        return cfg.get("virustotal_api_key", "")
-    except Exception:
-        return ""
-
-@app.route("/api/virustotal/key", methods=["POST"])
-def api_vt_set_key():
-    key = (request.json or {}).get("key", "")
-    _VT_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _VT_KEY_PATH.write_text(json.dumps({"key": key}))
-    return jsonify({"status": "saved"})
-
-@app.route("/api/virustotal/<query_type>/<path:query>")
-def api_vt_query(query_type, query):
-    import urllib.request
-    key = _vt_key()
-    if not key:
-        return jsonify({"error": "No VT API key configured"}), 400
-    endpoints = {
-        "hash":   f"https://www.virustotal.com/api/v3/files/{query}",
-        "ip":     f"https://www.virustotal.com/api/v3/ip_addresses/{query}",
-        "url":    f"https://www.virustotal.com/api/v3/urls/{query}",
-        "domain": f"https://www.virustotal.com/api/v3/domains/{query}",
-    }
-    url = endpoints.get(query_type)
-    if not url:
-        return jsonify({"error": "unknown type"}), 400
-    try:
-        req = urllib.request.Request(url, headers={"x-apikey": key})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode())
-        return jsonify(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ABUSEIPDB
-# ══════════════════════════════════════════════════════════════════════════════
-
-_ABUSE_KEY_PATH = Path.home() / ".AriaSecurity" / "abuseipdb_key.json"
-
-def _abuse_key() -> str:
-    try:
-        if _ABUSE_KEY_PATH.exists():
-            return json.loads(_ABUSE_KEY_PATH.read_text())["key"]
-    except Exception:
-        pass
-    try:
-        cfg = _load_config()
-        return cfg.get("abuseipdb_api_key", "")
-    except Exception:
-        return ""
-
-@app.route("/api/abuseipdb/key", methods=["POST"])
-def api_abuse_set_key():
-    key = (request.json or {}).get("key", "")
-    _ABUSE_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _ABUSE_KEY_PATH.write_text(json.dumps({"key": key}))
-    return jsonify({"status": "saved"})
-
-@app.route("/api/abuseipdb/lookup", methods=["POST"])
-def api_abuse_lookup():
-    ip = (request.json or {}).get("ip", "").strip()
-    if not ip:
-        return jsonify({"error": "no ip"}), 400
-    key = _abuse_key()
-    if not key:
-        return jsonify({"error": "No AbuseIPDB API key configured"}), 400
-    try:
-        from Services.SentinelThreatIntelligence import lookup_ip_abuseipdb
-        data = lookup_ip_abuseipdb(ip, key)
-        if not data:
-            return jsonify({"error": "No data returned"}), 404
-        return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1272,17 +1337,6 @@ def api_geo_blocks_set():
 # THREAT INTEL
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route("/api/threat_intel/stats")
-def api_ti_stats():
-    brain = get_brain()
-    tc = {cat.name: cnt for cat, cnt in brain._category_counts.items()}
-    return jsonify({
-        "total":      brain._total_threats,
-        "malware":    tc.get("MALWARE", 0),
-        "network":    tc.get("NETWORK", 0),
-        "behavioral": tc.get("BEHAVIORAL", 0),
-        "events":     [e.to_dict() for e in list(brain._threat_log)[-100:]],
-    })
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STORAGE
@@ -1294,6 +1348,21 @@ def api_storage():
         return jsonify(system_monitor.list_disks())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/storage/recycle_bin")
+def api_recycle_bin_info():
+    try:
+        return jsonify(system_monitor.recycle_bin_info())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/storage/recycle_bin/empty", methods=["POST"])
+def api_recycle_bin_empty():
+    """Permanently empty the Recycle Bin (the UI confirms first)."""
+    try:
+        return jsonify(system_monitor.empty_recycle_bin())
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVICE CONTROL
@@ -1375,44 +1444,18 @@ def _load_plugins() -> list:
         "installed": _module_installed(p["module"]),
     } for p in _PLUGIN_CATALOG]
 
-@app.route("/api/plugins")
-def api_plugins_get():
-    return jsonify(_load_plugins())
 
-@app.route("/api/plugins/<path:pkg>/install", methods=["POST"])
-def api_plugins_install(pkg):
-    entry = next((p for p in _PLUGIN_CATALOG if p["pkg"] == pkg), None)
-    if not entry:
-        return jsonify({"error": f"Unknown plugin: {pkg}"}), 400
-
-    def _install():
-        try:
-            socketio.emit("install_progress", {"pkg": pkg, "status": "installing"})
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", pkg],
-                capture_output=True, text=True, timeout=600,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            ok = (result.returncode == 0) and _module_installed(entry["module"])
-            socketio.emit("install_progress", {
-                "pkg": pkg, "status": "done", "success": ok,
-                "error": "" if ok else (result.stderr or result.stdout)[-400:],
-            })
-        except Exception as exc:
-            socketio.emit("install_progress", {"pkg": pkg, "status": "error", "error": str(exc)})
-    threading.Thread(target=_install, daemon=True).start()
-    return jsonify({"status": "started"})
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AVBRAIN MODEL  (download the GGUF that powers Argus, then hot-load it)
 # ══════════════════════════════════════════════════════════════════════════════
 
 _AVB_MODEL_URL = (
-    "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF"
-    "/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf"
+    "https://huggingface.co/tensorblock/SecurityLLM-GGUF"
+    "/resolve/main/SecurityLLM-Q2_K.gguf?download=true"
 )
 _AVB_MODEL_DIR  = Path.home() / ".AriaSecurity" / "avbrain"
-_AVB_MODEL_FILE = _AVB_MODEL_DIR / "Sentinel_A1.gguf"
+_AVB_MODEL_FILE = _AVB_MODEL_DIR / "SecurityLLM-Q2_K.gguf"
 _AVB_DOWNLOAD   = {"active": False}
 
 @app.route("/api/avbrain/model/status")
@@ -1601,35 +1644,7 @@ def api_about():
 # TOOLS — ping / traceroute
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.route("/api/tools/ping", methods=["POST"])
-def api_tools_ping():
-    host = (request.json or {}).get("host", "").strip()
-    if not host:
-        return jsonify({"error": "no host"}), 400
-    try:
-        r = subprocess.run(
-            ["ping", "-n", "4", host],
-            capture_output=True, text=True, timeout=20,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        return jsonify({"output": r.stdout or r.stderr, "returncode": r.returncode})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
-@app.route("/api/tools/traceroute", methods=["POST"])
-def api_tools_traceroute():
-    host = (request.json or {}).get("host", "").strip()
-    if not host:
-        return jsonify({"error": "no host"}), 400
-    try:
-        r = subprocess.run(
-            ["tracert", "-d", "-h", "20", host],
-            capture_output=True, text=True, timeout=60,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        return jsonify({"output": r.stdout or r.stderr, "returncode": r.returncode})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NET SCOPE  (per-NIC bandwidth snapshot)
@@ -1671,6 +1686,16 @@ _scheduler.start()
 # SOCKET.IO HANDLERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _push_console_line(rec):
+    """Stream each captured log line to the Console page in real time."""
+    try:
+        socketio.emit("console_line", rec)
+    except Exception:
+        pass
+
+_log_bus.subscribe(_push_console_line)
+
+
 @socketio.on("connect")
 def on_connect():
     emit("state_update", _state.snapshot())
@@ -1686,6 +1711,8 @@ def on_ping(data):
 _PORT = 8765
 
 def _start_flask():
+    # NOTE: Flask-SocketIO already passes threaded=True to app.run() for
+    # async_mode="threading" — do not pass it here, it raises TypeError.
     socketio.run(app, host="127.0.0.1", port=_PORT, debug=False,
                  use_reloader=False, allow_unsafe_werkzeug=True)
 

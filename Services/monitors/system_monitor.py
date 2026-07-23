@@ -24,6 +24,65 @@ def memory_snapshot() -> dict:
     }
 
 
+def recycle_bin_info() -> dict:
+    """Size and item count of the Recycle Bin (all drives). Windows-only."""
+    import ctypes
+    from ctypes import wintypes
+
+    class _SHQUERYRBINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD),
+                    ("i64Size", ctypes.c_int64),
+                    ("i64NumItems", ctypes.c_int64)]
+
+    info = _SHQUERYRBINFO()
+    info.cbSize = ctypes.sizeof(_SHQUERYRBINFO)
+    try:
+        # None = all drives
+        hr = ctypes.windll.shell32.SHQueryRecycleBinW(None, ctypes.byref(info))
+        if hr != 0:
+            return {"bytes": 0, "items": 0, "available": False}
+        return {"bytes": int(info.i64Size), "items": int(info.i64NumItems),
+                "available": True}
+    except Exception:
+        return {"bytes": 0, "items": 0, "available": False}
+
+
+def empty_recycle_bin(confirm: bool = False, progress: bool = False,
+                      sound: bool = False) -> dict:
+    """Permanently empty the Recycle Bin (all drives).
+
+    Flags default to fully silent (no Windows confirm dialog, no progress UI,
+    no sound) because the app asks for confirmation itself.
+    """
+    import ctypes
+
+    SHERB_NOCONFIRMATION = 0x00000001
+    SHERB_NOPROGRESSUI = 0x00000002
+    SHERB_NOSOUND = 0x00000004
+
+    flags = 0
+    if not confirm:
+        flags |= SHERB_NOCONFIRMATION
+    if not progress:
+        flags |= SHERB_NOPROGRESSUI
+    if not sound:
+        flags |= SHERB_NOSOUND
+
+    before = recycle_bin_info()
+    try:
+        hr = ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, flags)
+    except Exception as e:
+        return {"status": "error", "error": str(e), "freed_bytes": 0, "items": 0}
+
+    # S_OK, or "already empty" which the shell reports as an error code.
+    if hr not in (0, -2147418113):
+        return {"status": "error", "error": f"SHEmptyRecycleBin failed (0x{hr & 0xFFFFFFFF:08X})",
+                "freed_bytes": 0, "items": 0}
+    return {"status": "emptied",
+            "freed_bytes": before.get("bytes", 0),
+            "items": before.get("items", 0)}
+
+
 def list_disks() -> list:
     disks = []
     for part in psutil.disk_partitions(all=False):

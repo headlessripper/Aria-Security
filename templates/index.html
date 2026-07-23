@@ -7,249 +7,287 @@
 <!-- Vendored locally so the app works fully offline (no CDN dependency) -->
 <link href="/static/fonts/material-icons.css" rel="stylesheet"/>
 <script src="/static/socket.io.min.js"></script>
-<script>
-/* Swiss theme system — apply saved theme before first paint (no FOUC). */
-(function(){
-  var root=document.documentElement, KEY="aria-theme", saved="dark";
-  try{saved=localStorage.getItem(KEY)||"dark";}catch(e){}
-  root.dataset.theme=saved;
-  function syncIcon(){
-    var el=document.getElementById("theme-toggle-icon");
-    if(el) el.textContent=(root.dataset.theme==="light")?"dark_mode":"light_mode";
-  }
-  window.__toggleTheme=function(){
-    root.dataset.theme=(root.dataset.theme==="light")?"dark":"light";
-    try{localStorage.setItem(KEY,root.dataset.theme);}catch(e){}
-    syncIcon();
-  };
-  document.addEventListener("DOMContentLoaded",syncIcon);
-})();
-</script>
 <style>
 /* ══ TOKENS ═══════════════════════════════════════════════════════ */
 :root{
-  /* Swiss dark — true black, monochrome core, one blue accent, reserved status */
-  --bg:#000000;--surface:#0a0a0a;--card:#0f0f0f;--border:#262626;
-  --accent:#2b6bff;--green:#22c55e;--orange:#f59e0b;--red:#ef4444;
-  --purple:#8b5cf6;--text:#f5f5f5;--dim:#a3a3a3;--muted:#666666;
-  --sw:64px;
-  --font:"Helvetica Neue","Inter",Arial,system-ui,sans-serif;
-  --mono:"JetBrains Mono","Consolas","Menlo",monospace;
+  /* Soft UI Evolution — security blue + protected green on white.
+     Single light theme. Rounded geometry, soft layered depth.        */
+  --bg:#ffffff;
+  --surface:#f4f9fd;      /* subtle blue-tinted fill (inputs, wells) */
+  --surface-2:#eaf3fa;    /* hover / pressed fill                    */
+  --card:#ffffff;
+  --border:#e2ecf4;
+  --border-strong:#cddeeb;
+
+  --accent:#0369a1;       /* security blue (primary)  */
+  --accent-2:#0ea5e9;     /* sky (secondary)          */
+  --accent-soft:#e6f2fb;  /* tinted accent background */
+  --green:#16a34a;        /* protected                */
+  --green-soft:#e7f6ed;
+  --orange:#d97706;       /* warning                  */
+  --orange-soft:#fdf3e4;
+  --red:#dc2626;          /* threat                   */
+  --red-soft:#fdeaea;
+  --purple:#7c3aed;
+
+  --text:#0c2b3f;
+  --dim:#55708a;
+  --muted:#93a9bd;
+
+  /* radius scale — nothing sharp */
+  --r-xs:6px; --r-sm:8px; --r:10px; --r-lg:14px; --r-xl:18px; --r-pill:999px;
+
+  /* soft layered depth */
+  --sh-sm:0 1px 2px rgba(12,43,63,.05),0 1px 3px rgba(12,43,63,.04);
+  --sh:0 2px 6px rgba(12,43,63,.06),0 6px 16px rgba(12,43,63,.05);
+  --sh-lg:0 10px 28px rgba(12,43,63,.10);
+  --ring:0 0 0 3px rgba(3,105,161,.18);
+
+  --sw:68px;
+  --t:200ms cubic-bezier(.4,0,.2,1);
+  --font:"Segoe UI Variable Text","Segoe UI","Helvetica Neue",Arial,system-ui,sans-serif;
+  --mono:"Cascadia Code","JetBrains Mono","Consolas",monospace;
 }
-:root[data-theme="light"]{
-  /* Swiss light — true white */
-  --bg:#ffffff;--surface:#f5f5f5;--card:#ffffff;--border:#e0e0e0;
-  --accent:#1a4fd6;--green:#16a34a;--orange:#d97706;--red:#dc2626;
-  --purple:#7c3aed;--text:#0a0a0a;--dim:#525252;--muted:#a3a3a3;
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
 }
+
 /* ══ RESET ════════════════════════════════════════════════════════ */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);
-  color:var(--text);font-family:var(--font);font-size:14px;
-  -webkit-font-smoothing:antialiased;transition:background .15s,color .15s}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-thumb{background:var(--muted);border-radius:0}
+  color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#cfdded;border-radius:var(--r-pill);
+  border:3px solid var(--bg);background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:#b6cadd;background-clip:padding-box}
 ::-webkit-scrollbar-track{background:transparent}
 input,textarea,select{font-family:inherit}
 button{font-family:inherit;cursor:pointer;border:none;outline:none}
+:focus-visible{outline:none;box-shadow:var(--ring);border-radius:var(--r-sm)}
 
 /* ══ SHELL ════════════════════════════════════════════════════════ */
-#shell{display:flex;height:100vh;width:100vw;overflow:hidden;position:relative}
+#shell{display:flex;height:100vh;width:100vw;overflow:hidden;position:relative;
+  background:var(--surface)}
 
 /* ── Sidebar ─────────────────────────────────────────────────────── */
 #sidebar{
   width:var(--sw);min-width:var(--sw);
   background:var(--bg);border-right:1px solid var(--border);
   display:flex;flex-direction:column;align-items:center;
-  padding:12px 0 14px;gap:2px;z-index:20;flex-shrink:0;
+  padding:14px 0 16px;gap:6px;z-index:20;flex-shrink:0;
 }
 .nav-logo{
-  width:36px;height:36px;border-radius:0;margin-bottom:12px;
-  background:var(--accent);
+  width:40px;height:40px;border-radius:var(--r-lg);margin-bottom:14px;
+  background:linear-gradient(145deg,var(--accent-2),var(--accent));
+  box-shadow:var(--sh);
   display:flex;align-items:center;justify-content:center;flex-shrink:0;
 }
-.nav-logo .material-icons-round{font-size:20px;color:#fff}
-.nav-sep{width:36px;height:1px;background:var(--border);margin:6px 0;flex-shrink:0}
+.nav-logo .material-icons-round{font-size:21px;color:#fff}
+.nav-sep{width:32px;height:1px;background:var(--border);margin:6px 0;flex-shrink:0}
 .nav-btn{
-  position:relative;width:44px;height:44px;border-radius:0;
+  position:relative;width:46px;height:46px;border-radius:var(--r-lg);
   display:flex;align-items:center;justify-content:center;
-  color:var(--dim);background:transparent;transition:color .12s;
+  color:var(--dim);background:transparent;
+  transition:color var(--t),background var(--t),transform var(--t);
   flex-shrink:0;border:none;
 }
-.nav-btn:hover{color:var(--text)}
-.nav-btn.active{color:var(--accent)}
-.nav-btn.active::before{content:"";position:absolute;left:0;top:9px;bottom:9px;
-  width:2px;background:var(--accent)}
+.nav-btn:hover{color:var(--accent);background:var(--surface);transform:translateY(-1px)}
+.nav-btn.active{color:#fff;background:var(--accent);box-shadow:var(--sh)}
 .nav-btn .material-icons-round{font-size:21px;pointer-events:none}
 .nav-btn::after{
-  content:attr(data-tip);position:absolute;left:calc(100% + 10px);top:50%;
-  transform:translateY(-50%);background:var(--card);border:1px solid var(--border);
-  color:var(--text);padding:5px 10px;border-radius:0;font-size:12px;
-  white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .12s;z-index:300;
+  content:attr(data-tip);position:absolute;left:calc(100% + 12px);top:50%;
+  transform:translateY(-50%) scale(.96);transform-origin:left center;
+  background:var(--text);color:#fff;
+  padding:6px 11px;border-radius:var(--r-sm);font-size:12px;font-weight:500;
+  white-space:nowrap;pointer-events:none;opacity:0;
+  transition:opacity var(--t),transform var(--t);z-index:300;box-shadow:var(--sh);
 }
-.nav-btn:hover::after{opacity:1}
+.nav-btn:hover::after{opacity:1;transform:translateY(-50%) scale(1)}
 #nav-spacer{flex:1}
 
 /* ── Menu overlay ────────────────────────────────────────────────── */
-#menu-overlay{
-  position:fixed;inset:0;z-index:200;display:none;
-}
+#menu-overlay{position:fixed;inset:0;z-index:200;display:none}
 #menu-overlay.open{display:flex}
-#menu-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+#menu-backdrop{position:absolute;inset:0;background:rgba(12,43,63,.32)}
 #menu-panel{
   position:absolute;left:var(--sw);top:0;bottom:0;
-  width:248px;background:var(--bg);border-right:1px solid var(--border);
+  width:262px;background:var(--bg);border-right:1px solid var(--border);
   display:flex;flex-direction:column;z-index:10;overflow:hidden;
+  box-shadow:var(--sh-lg);
+  animation:menuIn .22s cubic-bezier(.4,0,.2,1);
 }
+@keyframes menuIn{from{transform:translateX(-10px);opacity:0}to{transform:none;opacity:1}}
 .menu-header{
   display:flex;align-items:center;justify-content:space-between;
-  padding:14px 16px 10px;border-bottom:1px solid var(--border);flex-shrink:0;
+  padding:16px 16px 12px;border-bottom:1px solid var(--border);flex-shrink:0;
 }
-.menu-header span{font-size:13px;font-weight:700;letter-spacing:.03em;color:var(--dim)}
+.menu-header span{font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--muted)}
 #menu-close-btn{
-  width:28px;height:28px;border-radius:0;display:flex;align-items:center;
+  width:30px;height:30px;border-radius:var(--r-sm);display:flex;align-items:center;
   justify-content:center;background:transparent;color:var(--dim);
-  transition:color .12s;
+  transition:color var(--t),background var(--t);
 }
-#menu-close-btn:hover{color:var(--text)}
-#menu-close-btn .material-icons-round{font-size:16px}
-.menu-body{flex:1;overflow-y:auto;padding:10px 8px 16px}
+#menu-close-btn:hover{color:var(--text);background:var(--surface)}
+#menu-close-btn .material-icons-round{font-size:17px}
+.menu-body{flex:1;overflow-y:auto;padding:10px 10px 16px}
 .menu-section-lbl{
-  font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted);
-  padding:8px 8px 4px;text-transform:uppercase;
+  font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted);
+  padding:12px 10px 5px;text-transform:uppercase;
 }
 .menu-item{
-  position:relative;display:flex;align-items:center;gap:10px;width:100%;
-  padding:9px 12px;border-radius:0;background:transparent;
+  position:relative;display:flex;align-items:center;gap:11px;width:100%;
+  padding:10px 12px;border-radius:var(--r);background:transparent;
   color:var(--dim);font-size:13px;font-weight:500;text-align:left;
-  transition:color .12s;border:none;cursor:pointer;
+  transition:color var(--t),background var(--t);border:none;cursor:pointer;
 }
-.menu-item:hover{color:var(--text)}
-.menu-item.active{color:var(--accent)}
-.menu-item.active::before{content:"";position:absolute;left:0;top:6px;bottom:6px;
-  width:2px;background:var(--accent)}
-.menu-item .material-icons-round{font-size:18px;flex-shrink:0}
+.menu-item:hover{color:var(--text);background:var(--surface)}
+.menu-item.active{color:var(--accent);background:var(--accent-soft);font-weight:600}
+.menu-item .material-icons-round{font-size:19px;flex-shrink:0}
 
 /* ── Main ────────────────────────────────────────────────────────── */
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 #topbar{
-  height:48px;min-height:48px;background:var(--bg);
+  height:56px;min-height:56px;background:var(--bg);
   border-bottom:1px solid var(--border);display:flex;align-items:center;
-  padding:0 20px;gap:14px;flex-shrink:0;
+  padding:0 22px;gap:14px;flex-shrink:0;
 }
-#topbar-title{font-size:14px;font-weight:700;flex:1;letter-spacing:.01em;text-transform:uppercase}
+#topbar-title{font-size:14px;font-weight:700;flex:1;letter-spacing:.02em;text-transform:uppercase;color:var(--dim)}
 #topbar-badge{
-  background:transparent;color:var(--accent);
-  border:1px solid var(--accent);border-radius:0;
-  padding:2px 8px;font-size:11px;font-weight:700;letter-spacing:.02em;
+  background:var(--accent-soft);color:var(--accent);
+  border:none;border-radius:var(--r-pill);
+  padding:4px 11px;font-size:11px;font-weight:700;letter-spacing:.02em;
 }
-#theme-toggle{
-  width:30px;height:30px;border-radius:0;display:flex;align-items:center;
-  justify-content:center;background:transparent;color:var(--dim);
-  border:1px solid var(--border);transition:color .12s,border-color .12s;
-}
-#theme-toggle:hover{color:var(--text);border-color:var(--dim)}
-#theme-toggle .material-icons-round{font-size:16px}
-#status-dot{
-  width:7px;height:7px;border-radius:50%;background:var(--muted);transition:background .3s;
-}
-#status-dot.active{background:var(--green);box-shadow:0 0 5px var(--green)}
-#status-text{font-size:12px;color:var(--dim)}
+#status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .3s}
+#status-dot.active{background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
+#status-text{font-size:12px;color:var(--dim);font-weight:500}
 
 /* ── Pages ───────────────────────────────────────────────────────── */
-#pages{flex:1;overflow:hidden;position:relative}
+#pages{flex:1;overflow:hidden;position:relative;background:var(--surface)}
 .page{
   position:absolute;inset:0;overflow-y:auto;
-  padding:20px 24px;flex-direction:column;display:none;
+  padding:22px 26px 26px;flex-direction:column;display:none;
 }
-.page.visible{display:flex}
+.page.visible{display:flex;animation:pageIn .22s cubic-bezier(.4,0,.2,1)}
+@keyframes pageIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 
 /* ══ COMPONENTS ══════════════════════════════════════════════════ */
-.pg-title{font-size:26px;font-weight:800;letter-spacing:-.025em;margin-bottom:20px;line-height:1.05}
-.card{background:var(--card);border:1px solid var(--border);border-radius:0;padding:20px 22px}
+.pg-title{font-size:24px;font-weight:700;letter-spacing:-.02em;margin-bottom:18px;line-height:1.15}
+.card{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:20px 22px;box-shadow:var(--sh-sm);transition:box-shadow var(--t);
+}
+.card:hover{box-shadow:var(--sh)}
 .row{display:flex;gap:12px;align-items:flex-start}
 .col{flex:1;min-width:0}
-.sec-label{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--dim);
-  margin-bottom:10px;text-transform:uppercase}
+.sec-label{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--muted);
+  margin-bottom:12px;text-transform:uppercase}
 .stat-chip{display:flex;flex-direction:column}
-.stat-num{font-size:38px;font-weight:800;line-height:1;letter-spacing:-.035em;font-variant-numeric:tabular-nums}
-.stat-lbl{font-size:12px;color:var(--dim);margin-top:6px;font-weight:500}
-.badge{display:inline-block;padding:2px 7px;border-radius:0;
-  font-size:11px;font-weight:700;letter-spacing:.03em}
+.stat-num{font-size:34px;font-weight:700;line-height:1;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;color:var(--text)}
+.stat-lbl{font-size:12px;color:var(--dim);margin-top:7px;font-weight:500}
+.badge{display:inline-block;padding:3px 10px;border-radius:var(--r-pill);
+  font-size:11px;font-weight:600;letter-spacing:.02em;line-height:1.5}
+
 .btn{
-  display:inline-flex;align-items:center;gap:6px;padding:9px 18px;
-  border-radius:0;font-size:13px;font-weight:600;letter-spacing:.01em;
-  transition:filter .12s,background .12s,color .12s;border:none;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  padding:9px 17px;border-radius:var(--r);
+  font-size:13px;font-weight:600;letter-spacing:.01em;
+  transition:background var(--t),color var(--t),box-shadow var(--t),transform var(--t),border-color var(--t);
+  border:1px solid transparent;cursor:pointer;
 }
-.btn:hover{filter:brightness(1.12)}
-.btn:active{filter:brightness(.9)}
-.btn-primary{background:var(--accent);color:#fff}
-.btn-danger{background:transparent;color:var(--red);border:1px solid var(--red)}
-.btn-ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
-.btn-ghost:hover{filter:none;border-color:var(--dim)}
-.btn-green{background:transparent;color:var(--green);border:1px solid var(--green)}
-.btn-sm{padding:6px 13px;font-size:12px}
-.btn:disabled{opacity:.4;cursor:not-allowed;filter:none !important}
-.btn .material-icons-round{font-size:15px}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn-primary{background:var(--accent);color:#fff;box-shadow:var(--sh-sm)}
+.btn-primary:hover{background:#025b8c;box-shadow:var(--sh)}
+.btn-danger{background:var(--red-soft);color:var(--red);border-color:transparent}
+.btn-danger:hover{background:var(--red);color:#fff}
+.btn-ghost{background:var(--bg);color:var(--text);border-color:var(--border)}
+.btn-ghost:hover{background:var(--surface);border-color:var(--border-strong)}
+.btn-green{background:var(--green-soft);color:var(--green);border-color:transparent}
+.btn-green:hover{background:var(--green);color:#fff}
+.btn-sm{padding:7px 13px;font-size:12px;border-radius:var(--r-sm)}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none !important;box-shadow:none !important}
+.btn .material-icons-round{font-size:16px}
+
 .inp{
-  width:100%;padding:9px 12px;border-radius:0;
+  width:100%;padding:10px 13px;border-radius:var(--r);
   background:var(--surface);border:1px solid var(--border);
-  color:var(--text);font-size:13px;outline:none;transition:border-color .12s;
+  color:var(--text);font-size:13px;outline:none;
+  transition:border-color var(--t),box-shadow var(--t),background var(--t);
 }
-.inp:focus{border-color:var(--accent)}
+.inp:hover{border-color:var(--border-strong)}
+.inp:focus{border-color:var(--accent);background:var(--bg);box-shadow:var(--ring)}
 .inp::placeholder{color:var(--muted)}
-textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:12px}
-.tbl{width:100%;border-collapse:collapse;font-size:13px}
-.tbl th{text-align:left;padding:9px 11px;color:var(--dim);font-size:11px;
-  font-weight:700;letter-spacing:.04em;border-bottom:1px solid var(--border);white-space:nowrap}
-.tbl td{padding:9px 11px;border-bottom:1px solid var(--border);vertical-align:middle}
+select.inp{cursor:pointer}
+textarea.inp{resize:vertical;font-family:var(--mono);font-size:12px;line-height:1.6}
+
+.tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+.tbl th{text-align:left;padding:10px 12px;color:var(--muted);font-size:10px;
+  font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  border-bottom:1px solid var(--border);white-space:nowrap;
+  position:sticky;top:0;background:var(--card);z-index:1}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
 .tbl tr:last-child td{border-bottom:none}
-.tbl tr:hover td{background:rgba(128,128,128,.10)}
-.feed-row{display:flex;align-items:center;gap:9px;padding:8px 3px;
-  border-bottom:1px solid var(--border);font-size:13px}
-.feed-row:last-child{border-bottom:none}
-.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.tbl tbody tr{transition:background var(--t)}
+.tbl tbody tr:hover td{background:var(--surface)}
+
+.feed-row{display:flex;align-items:center;gap:10px;padding:10px 8px;
+  border-radius:var(--r-sm);font-size:13px;transition:background var(--t)}
+.feed-row:hover{background:var(--surface)}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
 .mod-card{
-  background:var(--surface);border:1px solid var(--border);border-radius:0;
-  padding:14px 10px;text-align:center;display:flex;flex-direction:column;
-  align-items:center;gap:5px;transition:border-color .2s,background .2s;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:16px 12px;text-align:center;display:flex;flex-direction:column;
+  align-items:center;gap:7px;transition:border-color var(--t),background var(--t),box-shadow var(--t),transform var(--t);
 }
-.mod-card.active{background:var(--surface);border-color:var(--green)}
+.mod-card:hover{transform:translateY(-2px);box-shadow:var(--sh)}
+.mod-card.active{background:var(--green-soft);border-color:transparent}
 .mod-card .mod-dot{font-size:20px;line-height:1}
 .mod-card .mod-name{font-size:12px;font-weight:600;color:var(--text)}
 .mod-card .mod-st{font-size:11px;font-weight:600}
 .gauge-wrap{display:flex;align-items:center;justify-content:center}
-.country-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+
+.country-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .country-card{
-  background:var(--surface);border:1px solid var(--border);border-radius:0;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
   padding:14px 8px;text-align:center;cursor:pointer;user-select:none;
-  transition:border-color .15s,background .15s;
+  transition:border-color var(--t),background var(--t),transform var(--t),box-shadow var(--t);
 }
-.country-card:hover{border-color:var(--dim)}
-.country-card.blocked{background:var(--surface);border-color:var(--red)}
+.country-card:hover{transform:translateY(-2px);box-shadow:var(--sh);border-color:var(--border-strong)}
+.country-card.blocked{background:var(--red-soft);border-color:transparent}
 .country-card.blocked .cs{color:var(--red)}
-.country-card .cc{font-size:18px;font-weight:800}
-.country-card .cn{font-size:11px;margin-top:3px}
-.country-card .cs{font-size:10px;font-weight:700;margin-top:2px}
+.country-card .cc{font-size:17px;font-weight:700}
+.country-card .cn{font-size:11px;margin-top:3px;color:var(--dim)}
+.country-card .cs{font-size:10px;font-weight:700;margin-top:3px}
+
 #chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;
-  gap:9px;padding:10px 0;min-height:200px}
-.chat-msg{max-width:78%;padding:10px 13px;border-radius:0;font-size:13px;line-height:1.55}
-.chat-msg.user{align-self:flex-end;background:var(--accent);color:#fff;border:none}
-.chat-msg.aria{align-self:flex-start;background:var(--surface);border:1px solid var(--border)}
-.progress-bar-wrap{width:100%;height:4px;background:var(--border);border-radius:0;overflow:hidden}
-.progress-bar{height:100%;background:var(--accent);border-radius:0;transition:width .3s}
+  gap:10px;padding:12px 0;min-height:200px}
+.chat-msg{max-width:76%;padding:11px 15px;border-radius:var(--r-lg);
+  font-size:13px;line-height:1.6;box-shadow:var(--sh-sm)}
+.chat-msg.user{align-self:flex-end;background:var(--accent);color:#fff;
+  border-bottom-right-radius:var(--r-xs)}
+.chat-msg.aria{align-self:flex-start;background:var(--bg);border:1px solid var(--border);
+  border-bottom-left-radius:var(--r-xs)}
+
+.progress-bar-wrap{width:100%;height:6px;background:var(--surface-2);
+  border-radius:var(--r-pill);overflow:hidden}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent-2),var(--accent));
+  border-radius:var(--r-pill);transition:width .3s ease}
 .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);
   border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
-#toast-container{position:fixed;bottom:18px;right:18px;z-index:9999;
-  display:flex;flex-direction:column;gap:7px}
-.toast{background:var(--card);border:1px solid var(--border);border-radius:0;
-  padding:11px 16px;font-size:13px;max-width:320px;display:flex;align-items:center;gap:9px;
-  animation:slideIn .18s ease;box-shadow:0 4px 18px rgba(0,0,0,.28)}
+
+#toast-container{position:fixed;bottom:20px;right:20px;z-index:9999;
+  display:flex;flex-direction:column;gap:9px}
+.toast{background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:12px 17px;font-size:13px;max-width:340px;display:flex;align-items:center;gap:10px;
+  animation:slideIn .22s cubic-bezier(.4,0,.2,1);box-shadow:var(--sh-lg)}
 .toast.success{border-left:3px solid var(--green)}
 .toast.error{border-left:3px solid var(--red)}
 .toast.info{border-left:3px solid var(--accent)}
-@keyframes slideIn{from{transform:translateX(36px);opacity:0}to{transform:none;opacity:1}}
+@keyframes slideIn{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}
 </style>
 </head>
 <body>
@@ -261,12 +299,12 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
 
   <button class="nav-btn active" data-page="dashboard" data-tip="Dashboard">
     <span class="material-icons-round">dashboard</span></button>
-  <button class="nav-btn" data-page="protection" data-tip="Protection">
-    <span class="material-icons-round">security</span></button>
-  <button class="nav-btn" data-page="scan" data-tip="File Scan">
-    <span class="material-icons-round">manage_search</span></button>
-  <button class="nav-btn" data-page="threat-intel" data-tip="Threat Intel">
-    <span class="material-icons-round">radar</span></button>
+  <button class="nav-btn" data-page="history" data-tip="Scan History">
+    <span class="material-icons-round">history</span></button>
+  <button class="nav-btn" data-page="firewall" data-tip="Firewall">
+    <span class="material-icons-round">local_fire_department</span></button>
+  <button class="nav-btn" data-page="action-center" data-tip="Action Center">
+    <span class="material-icons-round">warning</span></button>
   <button class="nav-btn" data-page="aria" data-tip="Argus Assistant">
     <span class="material-icons-round">smart_toy</span></button>
 
@@ -287,8 +325,6 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
     <div class="menu-body">
 
       <div class="menu-section-lbl">Monitoring</div>
-      <button class="menu-item" data-page="history">
-        <span class="material-icons-round">history</span>Scan History</button>
       <button class="menu-item" data-page="network">
         <span class="material-icons-round">wifi_tethering</span>Network Monitor</button>
       <button class="menu-item" data-page="process-threats">
@@ -297,8 +333,6 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
         <span class="material-icons-round">storage</span>Memory Scanner</button>
 
       <div class="menu-section-lbl">Defense</div>
-      <button class="menu-item" data-page="firewall">
-        <span class="material-icons-round">fireplace</span>Firewall</button>
       <button class="menu-item" data-page="geo-block">
         <span class="material-icons-round">public</span>Geo Block</button>
       <button class="menu-item" data-page="behavioral">
@@ -317,18 +351,14 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
         <span class="material-icons-round">schedule</span>Scheduled Scans</button>
 
       <div class="menu-section-lbl">Tools</div>
-      <button class="menu-item" data-page="virustotal">
-        <span class="material-icons-round">biotech</span>VirusTotal</button>
-      <button class="menu-item" data-page="service-tools">
-        <span class="material-icons-round">build</span>Service Tools</button>
-      <button class="menu-item" data-page="plugins">
-        <span class="material-icons-round">extension</span>Plugins</button>
       <button class="menu-item" data-page="service">
         <span class="material-icons-round">miscellaneous_services</span>Service Control</button>
 
       <div class="menu-section-lbl">System</div>
       <button class="menu-item" data-page="storage">
         <span class="material-icons-round">storage</span>Storage</button>
+      <button class="menu-item" data-page="sense">
+        <span class="material-icons-round">travel_explore</span>Sentinel Sense</button>
       <button class="menu-item" data-page="connections">
         <span class="material-icons-round">hub</span>Connections Map</button>
       <button class="menu-item" data-page="net-scope">
@@ -337,8 +367,6 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
         <span class="material-icons-round">task</span>Task Manager</button>
       <button class="menu-item" data-page="console">
         <span class="material-icons-round">terminal</span>Console</button>
-      <button class="menu-item" data-page="action-center">
-        <span class="material-icons-round">report_problem</span>Action Center</button>
 
       <div class="menu-section-lbl">Application</div>
       <button class="menu-item" data-page="about">
@@ -355,9 +383,6 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
     <div id="topbar-badge">v{{ version }}</div>
     <div id="status-dot"></div>
     <div id="status-text">Offline</div>
-    <button id="theme-toggle" title="Toggle theme" onclick="window.__toggleTheme()">
-      <span class="material-icons-round" id="theme-toggle-icon">light_mode</span>
-    </button>
   </div>
 
   <div id="pages">
@@ -402,54 +427,9 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       </div>
     </div>
 
-    <!-- ═══ PROTECTION ══════════════════════════════════════════════ -->
-    <div class="page" id="page-protection">
-      <div class="pg-title">Protection</div>
-      <div class="card" id="prot-banner"
-        style="display:flex;align-items:center;gap:16px;border-left:4px solid var(--accent)">
-        <span id="prot-dot" style="font-size:26px;color:var(--muted)">●</span>
-        <div style="flex:1">
-          <div id="prot-label" style="font-size:15px;font-weight:700;color:var(--dim)">
-            Sentinel Protection: Disabled</div>
-          <div style="color:var(--muted);font-size:12px;margin-top:3px">
-            Enable to monitor threats in real-time across all modules.</div>
-        </div>
-        <button class="btn btn-primary" id="prot-toggle-btn" style="flex-shrink:0">
-          <span class="material-icons-round">power_settings_new</span>Enable Protection
-        </button>
-      </div>
-      <div class="card" style="margin-top:12px;flex:1">
-        <div class="sec-label">Protection Modules</div>
-        <div id="prot-mod-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:11px"></div>
-      </div>
-    </div>
+    
 
-    <!-- ═══ FILE SCAN ════════════════════════════════════════════════ -->
-    <div class="page" id="page-scan">
-      <div class="pg-title">File Scan</div>
-      <div class="card">
-        <div class="sec-label">Scan Target</div>
-        <div style="display:flex;gap:9px;align-items:center">
-          <input class="inp" id="scan-path-inp" placeholder="File or folder path…" style="flex:1"/>
-          <button class="btn btn-primary" id="scan-start-btn">
-            <span class="material-icons-round">search</span>Scan
-          </button>
-        </div>
-        <div id="scan-progress-wrap" style="margin-top:12px;display:none">
-          <div style="display:flex;justify-content:space-between;margin-bottom:5px;font-size:12px;color:var(--dim)">
-            <span id="scan-status-text">Scanning…</span>
-            <span id="scan-progress-pct">0%</span>
-          </div>
-          <div class="progress-bar-wrap"><div class="progress-bar" id="scan-progress-bar" style="width:0%"></div></div>
-        </div>
-      </div>
-      <div class="card" style="flex:1;margin-top:12px">
-        <div class="sec-label">Results</div>
-        <div id="scan-results-container" style="overflow-y:auto;max-height:calc(100vh - 260px)">
-          <div style="color:var(--dim);padding:24px;text-align:center">Enter a path and click Scan</div>
-        </div>
-      </div>
-    </div>
+    
 
     <!-- ═══ SCAN HISTORY ════════════════════════════════════════════ -->
     <div class="page" id="page-history">
@@ -481,30 +461,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       </div>
     </div>
 
-    <!-- ═══ THREAT INTEL ════════════════════════════════════════════ -->
-    <div class="page" id="page-threat-intel">
-      <div class="pg-title">Threat Intelligence</div>
-      <div class="row">
-        <div class="card col"><div class="stat-chip">
-          <div class="stat-num" id="ti-total" style="color:var(--red)">0</div>
-          <div class="stat-lbl">Total Threats</div></div></div>
-        <div class="card col"><div class="stat-chip">
-          <div class="stat-num" id="ti-malware" style="color:var(--orange)">0</div>
-          <div class="stat-lbl">Malware</div></div></div>
-        <div class="card col"><div class="stat-chip">
-          <div class="stat-num" id="ti-network" style="color:var(--accent)">0</div>
-          <div class="stat-lbl">Network</div></div></div>
-        <div class="card col"><div class="stat-chip">
-          <div class="stat-num" id="ti-behavioral" style="color:var(--purple)">0</div>
-          <div class="stat-lbl">Behavioral</div></div></div>
-      </div>
-      <div class="card" style="flex:1;margin-top:12px;display:flex;flex-direction:column">
-        <div class="sec-label">Live Event Feed</div>
-        <div id="ti-feed" style="flex:1;overflow-y:auto;max-height:calc(100vh - 260px)">
-          <div style="color:var(--dim);padding:24px;text-align:center">No events yet</div>
-        </div>
-      </div>
-    </div>
+    
 
     <!-- ═══ NETWORK ═════════════════════════════════════════════════ -->
     <div class="page" id="page-network">
@@ -666,6 +623,8 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
           <div id="wl-files-list" style="min-height:60px;max-height:340px;overflow-y:auto;margin-bottom:10px"></div>
           <div style="display:flex;gap:7px">
             <input class="inp" id="wl-file-inp" placeholder="File or dir path…" style="flex:1"/>
+            <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('wl-file-inp','file','Select a file')" title="Select a file"><span class="material-icons-round">folder_open</span>File</button>
+            <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('wl-file-inp','folder','Select a folder')" title="Select a folder"><span class="material-icons-round">folder_open</span>Folder</button>
             <button class="btn btn-green btn-sm" onclick="addWL('file')">Add</button>
             <button class="btn btn-ghost btn-sm" onclick="addWL('dir')" style="color:var(--dim)">Dir</button>
           </div>
@@ -741,7 +700,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       <div class="row">
         <div class="card col">
           <div class="sec-label">Encrypt &amp; Store File</div>
-          <input class="inp" id="vault-add-path" placeholder="Source file path…" style="margin-bottom:8px"/>
+          <div style="display:flex;gap:8px;margin-bottom:8px"><input class="inp" id="vault-add-path" placeholder="Source file path…" style="flex:1"/><button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('vault-add-path','file','Select a file to vault')" title="Select a file to vault"><span class="material-icons-round">folder_open</span>Browse</button></div>
           <input class="inp" id="vault-add-pwd" type="password"
             placeholder="Encryption password…" style="margin-bottom:11px"/>
           <button class="btn btn-primary btn-sm" id="vault-add-btn"
@@ -755,7 +714,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
           <input class="inp" id="vault-ext-id" placeholder="Vault ID (click row below)…" style="margin-bottom:8px" readonly/>
           <input class="inp" id="vault-ext-pwd" type="password"
             placeholder="Password…" style="margin-bottom:8px"/>
-          <input class="inp" id="vault-ext-dest" placeholder="Destination folder (blank = Downloads)…" style="margin-bottom:11px"/>
+          <div style="display:flex;gap:8px;margin-bottom:11px"><input class="inp" id="vault-ext-dest" placeholder="Destination folder (blank = Downloads)…" style="flex:1"/><button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('vault-ext-dest','folder','Select a destination folder')" title="Select a destination folder"><span class="material-icons-round">folder_open</span>Browse</button></div>
           <button class="btn btn-green btn-sm" id="vault-ext-btn"
             style="width:100%;justify-content:center">
             <span class="material-icons-round">lock_open</span>Decrypt &amp; Extract
@@ -783,6 +742,8 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
         <div class="sec-label">Add Schedule</div>
         <div style="display:flex;gap:9px;flex-wrap:wrap">
           <input class="inp" id="sched-path" placeholder="Scan path…" style="flex:2;min-width:180px"/>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('sched-path','folder','Select a folder to scan')" title="Select a folder to scan"><span class="material-icons-round">folder_open</span>Folder</button>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="pickPath('sched-path','file','Select a file to scan')" title="Select a file to scan"><span class="material-icons-round">folder_open</span>File</button>
           <select class="inp" id="sched-interval" style="flex:1;min-width:130px">
             <option value="1">Every 1 hour</option>
             <option value="6">Every 6 hours</option>
@@ -886,40 +847,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       </div>
     </div>
 
-    <!-- ═══ VIRUSTOTAL ════════════════════════════════════════════════ -->
-    <div class="page" id="page-virustotal">
-      <div class="pg-title">VirusTotal Lookup</div>
-      <div class="card" style="margin-bottom:12px">
-        <div class="sec-label">API Key</div>
-        <div style="display:flex;gap:9px">
-          <input class="inp" id="vt-key-inp" type="password" placeholder="VirusTotal API key…" style="flex:1"/>
-          <button class="btn btn-ghost btn-sm" id="vt-key-save-btn">
-            <span class="material-icons-round">key</span>Save
-          </button>
-        </div>
-      </div>
-      <div class="card">
-        <div class="sec-label">Lookup</div>
-        <div style="display:flex;gap:9px;margin-bottom:10px">
-          <select class="inp" id="vt-type" style="width:130px">
-            <option value="hash">File Hash</option>
-            <option value="ip">IP Address</option>
-            <option value="domain">Domain</option>
-            <option value="url">URL</option>
-          </select>
-          <input class="inp" id="vt-query" placeholder="Hash / IP / domain / URL…" style="flex:1"/>
-          <button class="btn btn-primary btn-sm" id="vt-search-btn">
-            <span class="material-icons-round">search</span>Lookup
-          </button>
-        </div>
-      </div>
-      <div class="card" style="flex:1;margin-top:12px">
-        <div class="sec-label">Result</div>
-        <pre id="vt-result"
-          style="color:var(--text);font-size:12px;overflow-y:auto;max-height:calc(100vh - 360px);
-                 white-space:pre-wrap;word-break:break-all;font-family:'Menlo','Consolas',monospace"></pre>
-      </div>
-    </div>
+    
 
     <!-- ═══ Argus ══════════════════════════════════════════════════════ -->
     <div class="page" id="page-aria">
@@ -933,7 +861,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
         <div style="flex:1;min-width:0">
           <div id="aria-model-title" style="font-size:14px;font-weight:700">AI Model: checking…</div>
           <div id="aria-model-sub" style="font-size:12px;color:var(--dim);margin-top:2px">
-            Phi-3.5-mini-instruct (~2.2&nbsp;GB). Powers Argus's reasoning and AVBrain.</div>
+            SecurityLLM-Q2_K (~2.5&nbsp;GB). Powers Argus's reasoning and AVBrain.</div>
           <div id="aria-model-progress-wrap" style="display:none;margin-top:8px">
             <div class="progress-bar-wrap"><div class="progress-bar" id="aria-model-bar" style="width:0%"></div></div>
             <div id="aria-model-progress-txt" style="font-size:11px;color:var(--dim);margin-top:4px"></div>
@@ -956,11 +884,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       </div>
     </div>
 
-    <!-- ═══ PLUGINS ════════════════════════════════════════════════════ -->
-    <div class="page" id="page-plugins">
-      <div class="pg-title">Plugins</div>
-      <div id="plugins-grid" style="display:flex;flex-direction:column;gap:11px"></div>
-    </div>
+    
 
     <!-- ═══ SERVICE CONTROL ═══════════════════════════════════════════ -->
     <div class="page" id="page-service">
@@ -1011,7 +935,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
 
       <!-- Logo + identity -->
       <div class="card" style="display:flex;align-items:center;gap:24px;margin-bottom:14px">
-        <div style="width:72px;height:72px;border-radius:0;flex-shrink:0;
+        <div style="width:72px;height:72px;border-radius:var(--r-lg);flex-shrink:0;
           background:var(--accent);
           display:flex;align-items:center;justify-content:center">
           <span class="material-icons-round" style="font-size:36px;color:#fff">shield</span>
@@ -1142,49 +1066,7 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       </div>
     </div>
 
-    <!-- ═══ SERVICE TOOLS ═════════════════════════════════════════════ -->
-    <div class="page" id="page-service-tools">
-      <div class="pg-title">Service Tools</div>
-      <!-- AbuseIPDB -->
-      <div class="card" style="margin-bottom:12px">
-        <div class="sec-label">AbuseIPDB — IP Reputation</div>
-        <div style="display:flex;gap:9px;margin-bottom:10px;flex-wrap:wrap">
-          <input class="inp" id="abuse-key-inp" type="password" placeholder="AbuseIPDB API key…" style="flex:1;min-width:200px"/>
-          <button class="btn btn-ghost btn-sm" id="abuse-key-save-btn">
-            <span class="material-icons-round">key</span>Save Key
-          </button>
-        </div>
-        <div style="display:flex;gap:9px">
-          <input class="inp" id="abuse-ip-inp" placeholder="IP address to check…" style="flex:1"/>
-          <button class="btn btn-primary btn-sm" id="abuse-check-btn">
-            <span class="material-icons-round">search</span>Check IP
-          </button>
-        </div>
-        <div id="abuse-result" style="margin-top:10px"></div>
-      </div>
-      <!-- Firewall quick-actions -->
-      <div class="card" style="margin-bottom:12px">
-        <div class="sec-label">Firewall Quick-Actions</div>
-        <div style="display:flex;gap:9px;flex-wrap:wrap">
-          <button class="btn btn-sm" style="background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)" id="st-clear-sentinel-btn">Clear All Sentinel Rules</button>
-          <button class="btn btn-sm" style="background:rgba(210,153,34,.1);color:var(--orange);border:1px solid rgba(210,153,34,.25)" id="st-clear-psds-btn">Clear PSDS Rules</button>
-        </div>
-        <div id="st-fw-result" style="margin-top:8px;font-size:13px;color:var(--dim)"></div>
-      </div>
-      <!-- Ping / traceroute -->
-      <div class="card">
-        <div class="sec-label">Ping / Traceroute</div>
-        <div style="display:flex;gap:9px;margin-bottom:9px">
-          <input class="inp" id="ping-host-inp" placeholder="Host or IP…" style="flex:1"/>
-          <button class="btn btn-ghost btn-sm" id="ping-btn">Ping</button>
-          <button class="btn btn-ghost btn-sm" id="trace-btn" style="color:var(--dim)">Traceroute</button>
-        </div>
-        <pre id="ping-result"
-          style="background:var(--surface);border:1px solid var(--border);border-radius:0;
-                 padding:10px;font-size:12px;color:var(--green);max-height:200px;overflow-y:auto;
-                 white-space:pre-wrap;word-break:break-all;margin:0">—</pre>
-      </div>
-    </div>
+    
 
     <!-- ═══ STORAGE ═══════════════════════════════════════════════════ -->
     <div class="page" id="page-storage">
@@ -1193,6 +1075,17 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
       <div id="storage-chips" class="row" style="flex-wrap:wrap;margin-bottom:14px"></div>
       <!-- C: usage bar -->
       <div class="card" id="storage-bar-card" style="margin-bottom:12px"></div>
+      <!-- Recycle Bin -->
+      <div class="card" style="margin-bottom:12px">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:12px">
+          <div>
+            <div class="sec-label" style="margin-bottom:4px">Recycle Bin</div>
+            <div id="rbin-summary" style="font-size:13px;color:var(--dim)">Checking…</div>
+          </div>
+          <button class="btn btn-danger btn-sm" id="rbin-empty-btn">
+            <span class="material-icons-round">delete_forever</span>Empty Recycle Bin</button>
+        </div>
+      </div>
       <!-- Per-drive table -->
       <div class="card" style="flex:1;overflow:hidden">
         <div class="sec-label">All Drives</div>
@@ -1204,6 +1097,42 @@ textarea.inp{resize:vertical;font-family:'Menlo','Consolas',monospace;font-size:
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- ═══ SENTINEL SENSE ═════════════════════════════════════════════ -->
+    <div class="page" id="page-sense">
+      <div class="pg-title">Sentinel Sense</div>
+
+      <!-- Residual cleanup prompts -->
+      <div id="sense-residual-wrap" style="margin-bottom:12px"></div>
+
+      <!-- Tracked applications -->
+      <div class="card" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="sec-label">Tracked Applications</div>
+          <div id="sense-summary" style="font-size:11px;color:var(--dim)"></div>
+        </div>
+        <div style="overflow-y:auto;max-height:calc(100vh - 300px)">
+          <table class="tbl">
+            <thead><tr>
+              <th>Application</th><th>Publisher</th><th>Status</th>
+              <th>Files</th><th>Dirs</th><th>Registry</th><th>Residuals</th><th></th>
+            </tr></thead>
+            <tbody id="sense-tbody">
+              <tr><td colspan="8" style="text-align:center;color:var(--dim);padding:20px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Expanded data tree for one app -->
+      <div class="card" id="sense-tree-card" style="margin-top:12px;display:none">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="sec-label" id="sense-tree-title">Data Tree</div>
+          <button class="btn btn-ghost btn-sm" onclick="senseCloseTree()">Close</button>
+        </div>
+        <div id="sense-tree" style="max-height:300px;overflow-y:auto;font-family:'Consolas',monospace;font-size:12px"></div>
       </div>
     </div>
 
@@ -1331,6 +1260,44 @@ function fmtSize(b) {
 }
 function fmtGB(b) { return (b/1073741824).toFixed(1)+' GB'; }
 
+/* Verdict -> colour (shared by Scan History and Memory scanner). */
+function verdictColor(v) {
+  if(!v) return 'var(--dim)';
+  v=v.toUpperCase();
+  if(v==='CLEAN')      return 'var(--green)';
+  if(v==='MALWARE')    return 'var(--red)';
+  if(v==='SUSPICIOUS') return 'var(--orange)';
+  return 'var(--dim)';
+}
+
+/* Open a native Windows file/folder picker and drop the result into `targetId`.
+   The WebView can't open one itself, so the host opens it and returns the path. */
+async function pickPath(targetId, mode, title){
+  const el = $(targetId); if(!el) return;
+  const btns = document.querySelectorAll(`[onclick*="pickPath('${targetId}'"]`);
+  btns.forEach(b => b.disabled = true);
+  try{
+    const d = await api('POST','/api/pick',
+      {mode, title, initial_dir: (el.value||'').trim()});
+    if(d.error){ toast(d.error,'error'); return; }
+    if(d.path){ el.value = d.path; el.dispatchEvent(new Event('input',{bubbles:true})); }
+    // a cancelled dialog returns an empty path — leave the field untouched
+  }catch(e){ toast('Picker failed: '+e.message,'error'); }
+  finally{ btns.forEach(b => b.disabled = false); }
+}
+
+/* HTML-escape for values interpolated into innerHTML (app names, file paths). */
+function esc(s) {
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+/* Escape for a value placed inside a single-quoted inline handler argument. */
+function escAttr(s) {
+  return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
+    .replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
 function setText(id, val) {
   const e = $(id);
   if(e) e.textContent = val;
@@ -1440,7 +1407,6 @@ socket.on('state_update', applyState);
 
 socket.on('threat_event', evt => {
   prependFeedEvent('dash-feed', evt);
-  if(_activePage==='threat-intel') prependFeedEvent('ti-feed', evt);
   if(_activePage==='network' && evt.category==='NETWORK') {
     prependFeedEvent('net-feed', evt);
     const n = parseInt($('net-total').textContent)||0;
@@ -1455,9 +1421,7 @@ socket.on('protection_toggled', d => {
 
 socket.on('error_event', d => toast(d.message, 'error'));
 
-socket.on('scan_progress', handleScanProgress);
 
-socket.on('install_progress', handleInstallProgress);
 
 socket.on('aria_reply', d => {
   // Remove any "thinking" bubbles
@@ -1589,8 +1553,11 @@ async function toggleProtection() {
     btns.forEach(b => { if(b) b.disabled=false; });
   }
 }
-$('toggle-protection-btn').addEventListener('click', toggleProtection);
-$('prot-toggle-btn').addEventListener('click', toggleProtection);
+/* Dashboard owns the protection toggle. (The Protection page had a second
+   button, prot-toggle-btn; guard it so a missing element can't halt the
+   rest of this script — that would silently kill every Refresher.) */
+$('toggle-protection-btn')?.addEventListener('click', toggleProtection);
+$('prot-toggle-btn')?.addEventListener('click', toggleProtection);
 
 /* ── Feed ─────────────────────────────────────────────────────────── */
 const CAT_C={
@@ -1626,67 +1593,6 @@ function prependFeedEvent(id, evt) {
   while(c.children.length>80) c.removeChild(c.lastChild);
 }
 
-/* ── File scan ────────────────────────────────────────────────────── */
-function verdictColor(v) {
-  if(!v) return 'var(--dim)';
-  v=v.toUpperCase();
-  if(v==='CLEAN')      return 'var(--green)';
-  if(v==='MALWARE')    return 'var(--red)';
-  if(v==='SUSPICIOUS') return 'var(--orange)';
-  return 'var(--dim)';
-}
-
-async function startScan() {
-  const path=$('scan-path-inp').value.trim();
-  if(!path){toast('Enter a path','error');return;}
-  $('scan-start-btn').disabled=true;
-  $('scan-progress-wrap').style.display='block';
-  $('scan-results-container').innerHTML='<div style="color:var(--dim);padding:24px;text-align:center">Scanning…</div>';
-  try { await api('POST','/api/scan',{path}); }
-  catch(e) {
-    toast('Scan error: '+e.message,'error');
-    $('scan-start-btn').disabled=false;
-  }
-}
-$('scan-start-btn').addEventListener('click', startScan);
-$('scan-path-inp').addEventListener('keydown', e => { if(e.key==='Enter') startScan(); });
-
-function handleScanProgress(d) {
-  const bar=$('scan-progress-bar'), pct=$('scan-progress-pct'), txt=$('scan-status-text');
-  if(d.status==='started') {
-    bar.style.width='0%'; pct.textContent='0%';
-    txt.textContent=`Scanning 0/${d.total||'?'} files`;
-  } else if(d.status==='running') {
-    const p=d.total?Math.round(d.done/d.total*100):0;
-    bar.style.width=p+'%'; pct.textContent=p+'%';
-    txt.textContent=`Scanning ${d.done}/${d.total}`;
-  } else if(d.status==='done') {
-    bar.style.width='100%'; pct.textContent='100%';
-    txt.textContent='Scan complete';
-    $('scan-start-btn').disabled=false;
-    renderScanResults(d.results||[]);
-  } else if(d.status==='error') {
-    txt.textContent='Error: '+(d.message||'');
-    bar.style.background='var(--red)';
-    $('scan-start-btn').disabled=false;
-  }
-}
-
-function renderScanResults(results) {
-  const c=$('scan-results-container');
-  if(!results.length){c.innerHTML='<div style="color:var(--green);padding:24px;text-align:center">✓ No threats found</div>';return;}
-  let html=`<table class="tbl"><thead><tr><th>File</th><th>Verdict</th><th>Reasons</th></tr></thead><tbody>`;
-  results.forEach(r=>{
-    const vc=verdictColor(r.verdict);
-    html+=`<tr>
-      <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dim)">${r.file||'—'}</td>
-      <td><span class="badge" style="background:${vc}22;color:${vc}">${r.verdict||'—'}</span></td>
-      <td style="font-size:12px;color:var(--dim)">${(r.reasons||[]).slice(0,2).join('; ')}</td>
-    </tr>`;
-  });
-  c.innerHTML=html+'</tbody></table>';
-}
-
 /* ── Scan history (auto-refresh: 5s) ─────────────────────────────── */
 async function loadHistory() {
   const search=$('hist-search').value, verdict=$('hist-verdict').value;
@@ -1717,19 +1623,6 @@ $('hist-clear-btn').addEventListener('click', async()=>{
   catch(e){ toast(e.message,'error'); }
 });
 Refresher.register('history', loadHistory, 5000);
-
-/* ── Threat Intel (auto-refresh: 3s) ─────────────────────────────── */
-async function loadThreatIntel() {
-  try {
-    const d=await api('GET','/api/threat_intel/stats');
-    setText('ti-total',    d.total||0);
-    setText('ti-malware',  d.malware||0);
-    setText('ti-network',  d.network||0);
-    setText('ti-behavioral',d.behavioral||0);
-    if(d.events) buildFeed('ti-feed', d.events);
-  } catch(e) {}
-}
-Refresher.register('threat-intel', loadThreatIntel, 3000);
 
 /* ── Network (auto-refresh: 3s) ───────────────────────────────────── */
 async function loadNetwork() {
@@ -1762,7 +1655,10 @@ async function loadFirewall() {
       return `<tr>
         <td style="font-family:monospace;font-size:12px">${_escHtml(name)}</td>
         <td><span class="badge" style="background:${tc}22;color:${tc}">${type}</span></td>
-        <td><button class="fw-unblock-btn btn btn-ghost btn-sm" data-ip="${_escHtml(ip)}" data-idx="${i}">Unblock</button></td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="fw-unblock-btn btn btn-ghost btn-sm" data-ip="${_escHtml(ip)}" data-idx="${i}">Unblock</button>
+          <button class="fw-trust-btn btn btn-green btn-sm" data-ip="${_escHtml(ip)}" title="Unblock and add to the whitelist so it is not blocked again">Unblock &amp; Trust</button>
+        </td>
       </tr>`;
     }).join('');
 
@@ -1777,6 +1673,25 @@ async function loadFirewall() {
           toast(`${ip} unblocked (${r.rules_deleted||0} rules removed)`,'info');
           loadFirewall();
         }catch(e){toast('Unblock failed: '+e.message,'error'); btn.disabled=false; btn.textContent='Unblock';}
+      });
+    });
+
+    // Unblock AND whitelist, so the engine stops re-blocking the address.
+    tbody.querySelectorAll('.fw-trust-btn').forEach(btn=>{
+      btn.addEventListener('click', async()=>{
+        const ip=btn.dataset.ip;
+        if(!ip) return;
+        if(!confirm(`Unblock ${ip} and add it to the whitelist?
+
+Aria will stop blocking this address until you remove it from the whitelist.`)) return;
+        btn.disabled=true; btn.textContent='…';
+        try{
+          const r=await api('POST','/api/firewall_rules/unblock',{ip, whitelist:true});
+          toast(r.whitelisted ? `${ip} unblocked and whitelisted`
+                              : `${ip} unblocked (whitelist failed)`,
+                r.whitelisted ? 'success' : 'error');
+          loadFirewall(); loadWhitelist?.();
+        }catch(e){toast('Failed: '+e.message,'error'); btn.disabled=false; btn.textContent='Unblock & Trust';}
       });
     });
   } catch(e) {
@@ -1923,7 +1838,7 @@ async function loadUSBGuard(){
       const d=drives[k], st=_GUARD_LABEL[d.status]||{t:d.status,c:'var(--dim)',i:'usb'};
       const threats=(d.threats||[]).length;
       const canTrust = d.status==='clean_pending' || d.status==='threat';
-      return `<div style="display:flex;align-items:center;gap:12px;padding:10px;border:1px solid var(--border);border-radius:0;margin-bottom:7px">
+      return `<div style="display:flex;align-items:center;gap:12px;padding:10px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:7px">
         <span class="material-icons-round" style="font-size:24px;color:${st.c}">${st.i}</span>
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;font-weight:700">${_escHtml(d.name||'USB Drive')} <span style="color:var(--dim);font-weight:400">(${_escHtml(k)})</span></div>
@@ -2384,26 +2299,6 @@ $('mem-clean-btn')?.addEventListener('click', async()=>{
 
 Refresher.register('memory', loadMemory, 5000);
 
-/* ── VirusTotal ───────────────────────────────────────────────────── */
-$('vt-key-save-btn').addEventListener('click', async()=>{
-  const key=$('vt-key-inp').value.trim();
-  if(!key){toast('Enter API key','error');return;}
-  try{await api('POST','/api/virustotal/key',{key});toast('VT key saved','success');}
-  catch(e){toast(e.message,'error');}
-});
-async function doVTLookup(){
-  const type=$('vt-type').value, query=$('vt-query').value.trim();
-  if(!query){toast('Enter a query','error');return;}
-  const pre=$('vt-result');
-  pre.textContent='Querying VirusTotal…';
-  try{
-    const data=await api('GET',`/api/virustotal/${type}/${encodeURIComponent(query)}`);
-    pre.textContent=JSON.stringify(data,null,2);
-  }catch(e){pre.textContent='Error: '+e.message;toast(e.message,'error');}
-}
-$('vt-search-btn').addEventListener('click', doVTLookup);
-$('vt-query').addEventListener('keydown',e=>{if(e.key==='Enter') doVTLookup();});
-
 /* ── Argus ─────────────────────────────────────────────────────────── */
 function appendAriaMsg(text, role){
   const c=$('chat-messages');
@@ -2451,14 +2346,14 @@ async function refreshAriaModelStatus(){
     }
     if(s.llm_available){
       icon.style.color='var(--green)'; title.textContent='AI Model: active';
-      sub.textContent='Argus is running on the local Phi-3.5 model.'; btn.style.display='none';
+      sub.textContent='Argus is running on the local SecurityLLM-Q2_K model.'; btn.style.display='none';
     } else if(s.model_present){
       icon.style.color='var(--orange)'; title.textContent='AI Model: downloaded, not loaded';
       sub.textContent='Model on disk ('+fmtSize(s.size)+'). Click to load it now.';
       btn.disabled=false; lbl.textContent='Load Model'; btn.style.display='';
     } else {
       icon.style.color='var(--dim)'; title.textContent='AI Model: not installed';
-      sub.innerHTML='Phi-3.5-mini-instruct (~2.2&nbsp;GB). Required for full Argus reasoning.';
+      sub.innerHTML='SecurityLLM-Q2_K (~2.5&nbsp;GB). Required for full Argus reasoning.';
       btn.disabled=false; lbl.textContent='Download Model'; btn.style.display='';
     }
   }catch(e){}
@@ -2471,7 +2366,7 @@ $('aria-model-btn')?.addEventListener('click', async()=>{
   try{
     const r=await api('POST','/api/avbrain/model/download');
     if(r.status==='already_present') toast('Model present — loading…','info');
-    else if(r.status==='started')    toast('Model download started (~2.2 GB)','info');
+    else if(r.status==='started')    toast('Model download started (~2.5 GB)','info');
   }catch(e){ toast('Download failed: '+e.message,'error'); _ariaModelDownloading=false; btn.disabled=false; }
 });
 
@@ -2496,52 +2391,6 @@ socket.on('avbrain_model_progress', d=>{
 });
 
 Refresher.register('aria', loadAriaHistory, 999999); // load once
-
-/* ── Plugins (auto-refresh: 30s) ─────────────────────────────────── */
-async function loadPlugins(){
-  try{
-    const plugins=await api('GET','/api/plugins');
-    const grid=$('plugins-grid'); grid.innerHTML='';
-    plugins.forEach(p=>{
-      const card=document.createElement('div');
-      card.className='card';
-      card.style.cssText='display:flex;align-items:center;gap:18px';
-      card.innerHTML=`
-        <div style="flex:1">
-          <div style="font-size:14px;font-weight:700">${p.name}</div>
-          <div style="font-size:12px;color:var(--dim);margin-top:3px">${p.desc||''}</div>
-        </div>
-        <div id="plugin-st-${p.pkg}" style="font-size:12px;color:${p.installed?'var(--green)':'var(--muted)'}">
-          ${p.installed?'Installed':'Not installed'}</div>
-        <button id="plugin-btn-${p.pkg}" class="btn ${p.installed?'btn-ghost':'btn-primary'} btn-sm"
-          onclick="installPlugin('${p.pkg}')">
-          ${p.installed?'Reinstall':'Install'}</button>`;
-      grid.appendChild(card);
-    });
-  }catch(e){}
-}
-async function installPlugin(pkg){
-  const btn=$(`plugin-btn-${pkg}`), st=$(`plugin-st-${pkg}`);
-  if(btn){btn.disabled=true;btn.innerHTML='<span class="spinner"></span>';}
-  if(st){st.textContent='Installing…';st.style.color='var(--accent)';}
-  try{await api('POST',`/api/plugins/${pkg}/install`);}
-  catch(e){toast(e.message,'error');}
-}
-function handleInstallProgress(d){
-  const btn=$(`plugin-btn-${d.pkg}`), st=$(`plugin-st-${d.pkg}`);
-  if(d.status==='done'){
-    if(d.success){
-      toast(`${d.pkg} installed`,'success');
-      if(st){st.textContent='Installed';st.style.color='var(--green)';}
-      if(btn){btn.disabled=false;btn.textContent='Reinstall';btn.className='btn btn-ghost btn-sm';}
-    }else{
-      toast(`Install failed: ${d.error||''}`.slice(0,80),'error');
-      if(st){st.textContent='Failed';st.style.color='var(--red)';}
-      if(btn){btn.disabled=false;btn.textContent='Install';btn.className='btn btn-primary btn-sm';}
-    }
-  }
-}
-Refresher.register('plugins', loadPlugins, 30000);
 
 /* ── Service control (auto-refresh: 5s) ─────────────────────────── */
 async function loadServiceStatus(){
@@ -2570,19 +2419,6 @@ Refresher.register('dashboard', async()=>{
   try{const s=await api('GET','/api/state');applyState(s);}catch(e){}
 }, 4000);
 
-/* ── Protection: no data to poll beyond Socket.IO ────────────────── */
-Refresher.register('protection', async()=>{
-  try{const s=await api('GET','/api/state');applyState(s);}catch(e){}
-}, 5000);
-
-/* ── Scan page ────────────────────────────────────────────────────── */
-Refresher.register('scan', async()=>{
-  try{
-    const d=await api('GET','/api/scan/results');
-    if(!d.running && d.results && d.results.length) renderScanResults(d.results);
-  }catch(e){}
-}, 3000);
-
 /* ── About page ───────────────────────────────────────────────────── */
 async function loadAbout(){
   try{
@@ -2607,11 +2443,25 @@ Refresher.register('about', loadAbout, 999999); // load once
 ═══════════════════════════════════════════════════════════════════ */
 
 /* ── Console ──────────────────────────────────────────────────────── */
+/* Keep the module dropdown in sync with the sources the log bus has actually
+   seen (they are discovered at runtime, not a fixed list of log files). */
+function syncConsoleSources(sources){
+  const sel=$('console-module'); if(!sel||!Array.isArray(sources)) return;
+  const current=sel.value;
+  const have=Array.from(sel.options).map(o=>o.value);
+  const wanted=['',...sources];
+  if(have.length===wanted.length && wanted.every((w,i)=>have[i]===w)) return;
+  sel.innerHTML='<option value="">All Modules</option>'+
+    sources.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  if(wanted.includes(current)) sel.value=current;
+}
+
 async function loadConsole(){
   const mod=$('console-module')?.value||'';
   const filt=($('console-filter')?.value||'').toLowerCase();
   try{
     const d=await api('GET',`/api/console/logs?lines=400&module=${encodeURIComponent(mod)}`);
+    syncConsoleSources(d.sources);
     const lines=(d.lines||[]).filter(l=>!filt||l.toLowerCase().includes(filt));
     const pre=$('console-output'); if(!pre) return;
     if(!lines.length){pre.textContent='No log entries match filter.';return;}
@@ -2631,14 +2481,36 @@ $('console-refresh-btn')?.addEventListener('click', loadConsole);
 $('console-module')?.addEventListener('change', loadConsole);
 $('console-filter')?.addEventListener('input', debounce(loadConsole, 400));
 $('console-clear-btn')?.addEventListener('click', async()=>{
-  const mod=$('console-module')?.value||'';
   try{
-    await api('POST','/api/console/clear', mod?{module:mod}:{});
+    await api('POST','/api/console/clear', {});
     toast('Console cleared','info');
     loadConsole();
   }catch(e){toast(e.message,'error');}
 });
-Refresher.register('console', loadConsole, 2000);
+
+/* Live stream: append lines as the app prints them (no polling lag). */
+if (typeof socket !== 'undefined' && socket) {
+  socket.on('console_line', rec => {
+    if (_activePage !== 'console') return;              // only when visible
+    const pre=$('console-output'); if(!pre) return;
+    const mod=($('console-module')?.value||'').toLowerCase();
+    if(mod && !(rec.source||'').toLowerCase().includes(mod)) return;
+    const line=`[${rec.source}] ${rec.text}`;
+    const filt=($('console-filter')?.value||'').toLowerCase();
+    if(filt && !line.toLowerCase().includes(filt)) return;
+    const lu=line.toUpperCase();
+    const c=lu.includes('ERROR')||lu.includes('CRITICAL')||lu.includes('EXCEPTION')?'var(--red)'
+           :lu.includes('WARN')?'var(--orange)'
+           :lu.includes('[AVBRAIN]')||lu.includes('[SENTINEL]')?'var(--accent)'
+           :'var(--green)';
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+    if(pre.textContent==='No log entries match filter.') pre.innerHTML='';
+    pre.insertAdjacentHTML('beforeend',
+      (pre.innerHTML?'\n':'')+`<span style="color:${c}">${esc(line)}</span>`);
+    if(atBottom) pre.scrollTop=pre.scrollHeight;
+  });
+}
+Refresher.register('console', loadConsole, 5000);
 
 /* ── Action Center ────────────────────────────────────────────────── */
 // Store quarantine items in a JS array; select by numeric index to avoid
@@ -2671,11 +2543,11 @@ async function loadQuarantine(){
       const name=_escHtml(it.basename||it.id);
       const orig=_escHtml(it.orig_path||'unknown origin');
       const keyBadge=it.has_key
-        ?'<span style="background:rgba(63,185,80,.15);color:var(--green);font-size:10px;padding:2px 6px;border-radius:0;margin-left:6px">KEY ✓</span>'
-        :'<span style="background:rgba(248,81,73,.1);color:var(--red);font-size:10px;padding:2px 6px;border-radius:0;margin-left:6px">NO KEY</span>';
+        ?'<span style="background:rgba(63,185,80,.15);color:var(--green);font-size:10px;padding:3px 8px;border-radius:var(--r-pill);margin-left:6px">KEY ✓</span>'
+        :'<span style="background:rgba(248,81,73,.1);color:var(--red);font-size:10px;padding:3px 8px;border-radius:var(--r-pill);margin-left:6px">NO KEY</span>';
       return `<div class="quar-item"
         data-idx="${i}"
-        style="cursor:pointer;padding:10px 12px;border-radius:0;margin-bottom:6px;
+        style="cursor:pointer;padding:10px 12px;border-radius:var(--r);margin-bottom:6px;
                background:${sel?'rgba(47,129,247,.1)':'var(--surface)'};
                border:1px solid ${sel?'var(--accent)':'var(--border)'}">
         <div style="font-size:13px;font-weight:600;color:var(--text)">${name}${keyBadge}</div>
@@ -2710,7 +2582,7 @@ async function loadActionThreats(){
     }
     c.innerHTML=events.slice(0,15).map(e=>{
       const c2=e.severity==='CRITICAL'?'var(--red)':'var(--orange)';
-      return `<div style="background:${c2}0f;border:1px solid ${c2}33;border-radius:0;
+      return `<div style="background:${c2}14;border:1px solid ${c2}33;border-radius:var(--r);
                            padding:9px 11px;margin-bottom:6px;">
         <div style="font-size:11px;font-weight:700;color:${c2}">${e.severity||'HIGH'}</div>
         <div style="font-size:13px;color:var(--text);margin-top:2px">${_escHtml(e.title||'')}</div>
@@ -2759,75 +2631,6 @@ $('quar-delete-btn')?.addEventListener('click', async()=>{
 
 Refresher.register('action-center', loadActionCenter, 5000);
 
-/* ── Service Tools ────────────────────────────────────────────────── */
-const _abuseKeyPath = '/api/abuseipdb/key';
-$('abuse-key-save-btn')?.addEventListener('click', async()=>{
-  const key=$('abuse-key-inp')?.value.trim(); if(!key){toast('Enter key','error');return;}
-  try{await api('POST',_abuseKeyPath,{key});toast('AbuseIPDB key saved','success');}
-  catch(e){toast(e.message,'error');}
-});
-$('abuse-check-btn')?.addEventListener('click', doAbuseCheck);
-$('abuse-ip-inp')?.addEventListener('keydown', e=>{if(e.key==='Enter')doAbuseCheck();});
-async function doAbuseCheck(){
-  const ip=$('abuse-ip-inp')?.value.trim(); if(!ip){toast('Enter IP','error');return;}
-  const res=$('abuse-result'); if(!res) return;
-  res.innerHTML='<div style="color:var(--dim);font-size:13px">Checking…</div>';
-  try{
-    const d=await api('POST','/api/abuseipdb/lookup',{ip});
-    const score=d.abuseConfidenceScore??d.data?.abuseConfidenceScore??0;
-    const reports=d.totalReports??d.data?.totalReports??0;
-    const country=d.countryCode??d.data?.countryCode??'??';
-    const isp=d.isp??d.data?.isp??'';
-    const sc=score>=50?'var(--red)':score>0?'var(--orange)':'var(--green)';
-    res.innerHTML=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:0;padding:14px;margin-top:8px">
-      <div style="font-size:28px;font-weight:800;color:${sc}">${score}% Abuse Score</div>
-      <div style="display:flex;gap:20px;margin-top:8px;font-size:13px;color:var(--dim)">
-        <span>Reports: <b style="color:var(--text)">${reports}</b></span>
-        <span>Country: <b style="color:var(--text)">${country}</b></span>
-        <span>ISP: <b style="color:var(--text)">${isp.slice(0,40)||'—'}</b></span>
-      </div>
-    </div>`;
-  }catch(e){
-    res.innerHTML=`<div style="color:var(--red);font-size:13px;margin-top:8px">Error: ${e.message}</div>`;
-  }
-}
-$('st-clear-sentinel-btn')?.addEventListener('click', async()=>{
-  const r=$('st-fw-result');
-  try{await api('POST','/api/firewall/clear_sentinel');toast('Sentinel rules cleared','success');if(r)r.textContent='Sentinel rules cleared.';}
-  catch(e){toast(e.message,'error');}
-});
-$('st-clear-psds-btn')?.addEventListener('click', async()=>{
-  const r=$('st-fw-result');
-  try{await api('POST','/api/firewall/clear_psds');toast('PSDS rules cleared','success');if(r)r.textContent='PSDS rules cleared.';}
-  catch(e){toast(e.message,'error');}
-});
-$('ping-btn')?.addEventListener('click', doPing);
-$('trace-btn')?.addEventListener('click', doTrace);
-$('ping-host-inp')?.addEventListener('keydown', e=>{if(e.key==='Enter')doPing();});
-async function doPing(){
-  const h=$('ping-host-inp')?.value.trim(); if(!h){toast('Enter host','error');return;}
-  const pre=$('ping-result'); if(!pre) return;
-  pre.textContent=`Pinging ${h}…`;
-  $('ping-btn').disabled=true;
-  try{
-    const d=await api('POST','/api/tools/ping',{host:h});
-    pre.textContent=d.output||'(no output)';
-  }catch(e){pre.textContent='Error: '+e.message;}
-  finally{$('ping-btn').disabled=false;}
-}
-async function doTrace(){
-  const h=$('ping-host-inp')?.value.trim(); if(!h){toast('Enter host','error');return;}
-  const pre=$('ping-result'); if(!pre) return;
-  pre.textContent=`Tracing route to ${h}…`;
-  $('trace-btn').disabled=true;
-  try{
-    const d=await api('POST','/api/tools/traceroute',{host:h});
-    pre.textContent=d.output||'(no output)';
-  }catch(e){pre.textContent='Error: '+e.message;}
-  finally{$('trace-btn').disabled=false;}
-}
-Refresher.register('service-tools', async()=>{}, 999999);
-
 /* ── Storage ──────────────────────────────────────────────────────── */
 async function loadStorage(){
   try{
@@ -2856,8 +2659,8 @@ async function loadStorage(){
           <span class="sec-label" style="margin:0">${c_drive.device||c_drive.mountpoint} USAGE</span>
           <span style="font-size:12px;color:var(--dim)">${fmtGB(c_drive.used)} / ${fmtGB(c_drive.total)}</span>
         </div>
-        <div style="background:var(--border);border-radius:0;height:14px;overflow:hidden">
-          <div style="background:${bc};width:${pct}%;height:100%;border-radius:0;transition:width .4s"></div>
+        <div style="background:var(--surface-2);border-radius:var(--r-pill);height:14px;overflow:hidden">
+          <div style="background:${bc};width:${pct}%;height:100%;border-radius:var(--r-pill);transition:width .4s"></div>
         </div>
         <div style="display:flex;gap:20px;margin-top:8px;font-size:12px">
           <span style="color:var(--red)">Used: ${fmtGB(c_drive.used)}</span>
@@ -2881,7 +2684,135 @@ async function loadStorage(){
     }).join('');
   }catch(e){toast('Storage: '+e.message,'error');}
 }
-Refresher.register('storage', loadStorage, 10000);
+async function loadRecycleBin(){
+  const el=$('rbin-summary'); if(!el) return;
+  try{
+    const d=await api('GET','/api/storage/recycle_bin');
+    el.textContent = !d.available ? 'Unavailable'
+      : (d.items ? `${d.items} item(s) · ${fmtSize(d.bytes)}` : 'Empty');
+    const btn=$('rbin-empty-btn'); if(btn) btn.disabled = !d.available || !d.items;
+  }catch(e){ el.textContent='Unavailable'; }
+}
+$('rbin-empty-btn')?.addEventListener('click', async()=>{
+  const btn=$('rbin-empty-btn');
+  if(!confirm('Permanently empty the Recycle Bin?\n\nThis cannot be undone.')) return;
+  btn.disabled=true;
+  try{
+    const r=await api('POST','/api/storage/recycle_bin/empty',{});
+    if(r.status==='emptied') toast(`Recycle Bin emptied — ${r.items} item(s), ${fmtSize(r.freed_bytes)} freed`,'success');
+    else toast(r.error||'Could not empty Recycle Bin','error');
+  }catch(e){ toast('Failed: '+e.message,'error'); }
+  finally{ loadRecycleBin(); loadStorage(); }
+});
+Refresher.register('storage', async()=>{ await loadStorage(); await loadRecycleBin(); }, 10000);
+
+/* ── Sentinel Sense ───────────────────────────────────────────────── */
+const SENSE_STATUS = {
+  installed:     {label:'Installed', color:'var(--green)'},
+  uninstalled:   {label:'Residuals', color:'var(--amber)'},
+  residual_kept: {label:'Kept',      color:'var(--dim)'},
+  cleaned:       {label:'Cleaned',   color:'var(--green)'},
+};
+
+async function loadSense(){
+  // 1 — pending cleanup prompts
+  try{
+    const res = await (await fetch('/api/sense/residuals')).json();
+    const wrap = document.getElementById('sense-residual-wrap');
+    if(!Array.isArray(res) || !res.length){ wrap.innerHTML=''; }
+    else{
+      wrap.innerHTML = res.map(r=>`
+        <div class="card" style="border-left:3px solid var(--amber);margin-bottom:8px">
+          <div class="row" style="justify-content:space-between;align-items:center;gap:12px">
+            <div>
+              <div style="font-weight:600">${esc(r.name)} was uninstalled</div>
+              <div style="font-size:12px;color:var(--dim)">
+                ${r.residual_count} residual item(s) left behind — ${fmtSize(r.residual_bytes)}
+              </div>
+            </div>
+            <div class="row" style="gap:8px">
+              <button class="btn btn-ghost btn-sm" onclick="senseShowTree('${escAttr(r.key)}')">View data tree</button>
+              <button class="btn btn-ghost btn-sm" onclick="senseKeep('${escAttr(r.key)}')">Keep</button>
+              <button class="btn btn-danger btn-sm" onclick="senseCleanup('${escAttr(r.key)}','${escAttr(r.name)}',${r.residual_count})">Clean up</button>
+            </div>
+          </div>
+        </div>`).join('');
+    }
+  }catch(e){}
+
+  // 2 — tracked application table
+  try{
+    const apps = await (await fetch('/api/sense/apps')).json();
+    const tb = document.getElementById('sense-tbody');
+    if(!Array.isArray(apps) || !apps.length){
+      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--dim);padding:20px">No tracked applications yet — Sentinel Sense records new installs as they happen.</td></tr>';
+      document.getElementById('sense-summary').textContent = '';
+      return;
+    }
+    document.getElementById('sense-summary').textContent =
+      `${apps.length} tracked · ${apps.filter(a=>a.status==='uninstalled').length} awaiting cleanup`;
+    tb.innerHTML = apps.map(a=>{
+      const st = SENSE_STATUS[a.status] || {label:a.status, color:'var(--dim)'};
+      const canClean = a.status === 'uninstalled' && a.residual_count > 0;
+      return `<tr>
+        <td style="font-weight:600">${esc(a.name)}</td>
+        <td style="color:var(--dim)">${esc(a.publisher||'—')}</td>
+        <td><span class="badge" style="background:${st.color};color:var(--bg);opacity:.85">${st.label}</span></td>
+        <td>${a.file_count}</td><td>${a.dir_count}</td><td>${a.reg_count}</td>
+        <td>${a.residual_count ? esc(fmtSize(a.residual_bytes)) : '—'}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn btn-ghost btn-sm" onclick="senseShowTree('${escAttr(a.key)}')">Tree</button>
+          ${canClean ? `<button class="btn btn-danger btn-sm" onclick="senseCleanup('${escAttr(a.key)}','${escAttr(a.name)}',${a.residual_count})">Clean</button>` : ''}
+        </td></tr>`;
+    }).join('');
+  }catch(e){
+    document.getElementById('sense-tbody').innerHTML =
+      '<tr><td colspan="8" style="text-align:center;color:var(--red);padding:20px">Failed to load</td></tr>';
+  }
+}
+
+async function senseShowTree(key){
+  try{
+    const rec = await (await fetch('/api/sense/app/'+encodeURIComponent(key))).json();
+    if(rec.error){ toast(rec.error,'error'); return; }
+    const section = (title, items, icon) => {
+      if(!items || !items.length) return '';
+      return `<div style="margin-bottom:10px">
+        <div style="color:var(--dim);font-size:11px;letter-spacing:.04em;margin-bottom:4px">${title} (${items.length})</div>
+        ${items.map(p=>`<div style="padding:2px 0"><span class="material-icons-round" style="font-size:13px;vertical-align:-2px;color:var(--dim)">${icon}</span> ${esc(p)}</div>`).join('')}
+      </div>`;
+    };
+    document.getElementById('sense-tree-title').textContent = 'Data Tree — ' + (rec.name || key);
+    document.getElementById('sense-tree').innerHTML =
+      (section('Directories', rec.dirs, 'folder') +
+       section('Files', rec.files, 'description') +
+       section('Registry', rec.registry, 'key') +
+       section('Residuals still on disk', rec.residuals, 'warning')) ||
+      '<div style="color:var(--dim)">No footprint recorded.</div>';
+    document.getElementById('sense-tree-card').style.display = '';
+  }catch(e){ toast('Could not load data tree','error'); }
+}
+function senseCloseTree(){ document.getElementById('sense-tree-card').style.display='none'; }
+
+async function senseCleanup(key, name, count){
+  if(!confirm(`Permanently delete ${count} residual item(s) left by "${name}"?\n\nThis cannot be undone. Only files Sentinel Sense recorded for this application will be removed.`)) return;
+  try{
+    const r = await (await fetch('/api/sense/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})})).json();
+    if(r.error){ toast(r.error,'error'); return; }
+    toast(`Removed ${r.deleted} item(s), freed ${fmtSize(r.freed_bytes)}` + (r.failed?` · ${r.failed} skipped`:''), 'success');
+    senseCloseTree(); loadSense();
+  }catch(e){ toast('Cleanup failed','error'); }
+}
+
+async function senseKeep(key){
+  try{
+    const r = await (await fetch('/api/sense/keep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})})).json();
+    if(r.error){ toast(r.error,'error'); return; }
+    toast('Residuals kept — still tracked in Sense_Map','info');
+    loadSense();
+  }catch(e){ toast('Failed','error'); }
+}
+Refresher.register('sense', loadSense, 15000);
 
 /* ── Connections Map ──────────────────────────────────────────────── */
 let _connFilter={status:'ALL',text:''};
