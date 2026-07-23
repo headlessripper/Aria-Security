@@ -40,3 +40,12 @@ Engine/Signatures/*.ips
 /build/
 /dist/
 *.spec.bak
+
+Client/
+docs/
+scripts/
+tests/
+
+pytest.ini
+run_dev.py
+.claude
