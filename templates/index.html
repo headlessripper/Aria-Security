@@ -2695,9 +2695,7 @@ async function loadRecycleBin(){
 }
 $('rbin-empty-btn')?.addEventListener('click', async()=>{
   const btn=$('rbin-empty-btn');
-  if(!confirm('Permanently empty the Recycle Bin?
-
-This cannot be undone.')) return;
+  if(!confirm('Permanently empty the Recycle Bin?\n\nThis cannot be undone.')) return;
   btn.disabled=true;
   try{
     const r=await api('POST','/api/storage/recycle_bin/empty',{});
